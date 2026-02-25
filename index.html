@@ -1,3 +1,131 @@
+<!-- Main Page -->
+  <div id="main-page">
+    <div class="header">
+      <div>
+        <div style="font-size:18px;font-weight:700;">🙏 Daily Tracker</div>
+        <div style="font-size:11px;opacity:.82;margin-top:2px;">Daily Spiritual Count</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <button class="history-btn" onclick="openHistory()">📋 History</button>
+        <button class="pending-btn" onclick="openPending()" style="background:rgba(255,255,255,.22);border:none;color:white;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">⏳ Pending</button>
+      </div>
+    </div>
+
+    <div class="date-strip">
+      <div class="label">Today's Date</div>
+      <div class="date-val" id="today-date"></div>
+    </div>
+
+    <div class="fields-container" id="fields-container"></div>
+
+    <!-- JS Error fallback -->
+    <div id="js-error" style="display:none;background:#ffdddd;color:#a00;padding:16px;text-align:center;font-size:16px;margin:16px;border-radius:10px;">
+      ⚠️ Something went wrong. Try refreshing or using a different browser.
+    </div>
+
+    <div class="totals-section">
+      <div class="totals-title">📊 All Time Total</div>
+      <div class="totals-grid" id="totals-grid"></div>
+    </div>
+  </div>
+
+
+  <!-- Pending Count Tracker Overlay (hidden by default) -->
+  <div id="pending-overlay" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(245,240,255,0.98);overflow-y:auto;-webkit-overflow-scrolling:touch;">
+    <div style="max-width:600px;margin:40px auto 24px auto;padding:20px 12px 18px 12px;background:#faf8ff;border-radius:16px;box-shadow:0 2px 12px rgba(108,61,199,.13);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <h2 style="font-size:18px;color:#6c3dc7;font-weight:700;margin:0;">⏳ Pending Count Tracker</h2>
+        <button onclick="closePending()" style="background:#eee;color:#6c3dc7;border:none;border-radius:8px;padding:6px 16px;font-size:15px;font-weight:700;cursor:pointer;">Close</button>
+      </div>
+      <form id="pending-form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+        <input id="pending-count" type="number" min="1" placeholder="Pending Count" style="flex:1;min-width:90px;padding:8px 10px;border-radius:7px;border:1.2px solid #e5e7eb;font-size:15px;" required />
+        <select id="pending-field" style="flex:1;min-width:110px;padding:8px 10px;border-radius:7px;border:1.2px solid #e5e7eb;font-size:15px;">
+          <option value="archavatar-stotra">આર્ચાવતાર સ્તોત્ર</option>
+          <option value="vandu-path">વંદુ પાઠ</option>
+          <option value="janmangal-path">જનમંગલ પાઠ</option>
+          <option value="namjap">નામજાપ</option>
+        </select>
+        <button type="submit" style="background:#6c3dc7;color:#fff;padding:8px 18px;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer;">Add Pending</button>
+      </form>
+      <div id="pending-table-container"></div>
+    </div>
+  </div>
+<script>
+// Pending overlay open/close logic
+function openPending() {
+  document.getElementById('pending-overlay').style.display = 'block';
+}
+function closePending() {
+  document.getElementById('pending-overlay').style.display = 'none';
+}
+</script>
+<script>
+// ====== PENDING TRACKER ======
+function getPendingData() {
+  try {
+    return JSON.parse(localStorage.getItem('pending-tracker') || '[]');
+  } catch (e) {
+    return [];
+  }
+}
+function savePendingData(data) {
+  localStorage.setItem('pending-tracker', JSON.stringify(data));
+}
+
+function addPendingEntry(date, fieldId, count) {
+  const data = getPendingData();
+  data.push({ date, fieldId, count });
+  savePendingData(data);
+}
+
+function renderPendingTable() {
+  const data = getPendingData();
+  if (!data.length) {
+    document.getElementById('pending-table-container').innerHTML = '<div style="color:#aaa;text-align:center;padding:18px;">No pending entries yet</div>';
+    return;
+  }
+  // Sort by date descending
+  data.sort((a, b) => b.date.localeCompare(a.date));
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:15px;">';
+  html += '<thead><tr style="background:#f5f0ff;"><th style="padding:8px 4px;text-align:left;">Date</th><th style="padding:8px 4px;text-align:left;">Field</th><th style="padding:8px 4px;text-align:right;">Pending</th></tr></thead><tbody>';
+  data.forEach(entry => {
+    const field = FIELDS.find(f => f.id === entry.fieldId);
+    html += `<tr><td style="padding:6px 4px;">${formatDate(entry.date)}</td><td style="padding:6px 4px;">${field ? field.name : entry.fieldId}</td><td style="padding:6px 4px;text-align:right;">${entry.count}</td></tr>`;
+  });
+  html += '</tbody>';
+  // Totals
+  const totals = {};
+  FIELDS.forEach(f => { totals[f.id] = 0; });
+  data.forEach(entry => { if (totals[entry.fieldId] !== undefined) totals[entry.fieldId] += entry.count; });
+  html += '<tfoot><tr style="background:#ede9ff;font-weight:700;"><td colspan="2" style="padding:8px 4px;">Total (per field)</td><td style="padding:8px 4px;text-align:right;"><ul style="list-style:none;padding:0;margin:0;">';
+  FIELDS.forEach(f => { html += `<li style="color:${f.color};font-size:15px;">${f.name}: ${totals[f.id]}</li>`; });
+  html += '</ul></td></tr></tfoot>';
+  html += '</table>';
+  document.getElementById('pending-table-container').innerHTML = html;
+}
+
+function setupPendingForm() {
+  const form = document.getElementById('pending-form');
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const count = parseInt(document.getElementById('pending-count').value, 10);
+    const fieldId = document.getElementById('pending-field').value;
+    if (!count || count <= 0) {
+      showToast('⚠️ Please enter a valid pending count');
+      return;
+    }
+    addPendingEntry(todayStr(), fieldId, count);
+    document.getElementById('pending-count').value = '';
+    renderPendingTable();
+    showToast('Pending count added');
+  });
+}
+// Setup pending tracker on page load
+document.addEventListener('DOMContentLoaded', function() {
+  setupPendingForm();
+  renderPendingTable();
+});
+</script>
 <!-- ...replaced with contents of daily-tracker-mobile.html... -->
 <!DOCTYPE html>
 <html lang="en">
@@ -156,8 +284,8 @@
     }
     
     .totals-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
+      display: flex;
+      flex-direction: column;
       gap: 1px;
       background: #f0f0f0;
     }
@@ -168,7 +296,25 @@
       text-align: center;
     }
     .total-item .t-name { font-size: 11px; color: #777; margin-bottom: 4px; line-height: 1.3; }
-    .total-item .t-val { font-size: 28px; font-weight: 800; }
+    .total-item .t-val {
+      font-size: 28px;
+      font-weight: 800;
+      max-width: 95vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: block;
+      cursor: pointer;
+    }
+    .total-item .t-val:hover {
+      white-space: normal;
+      word-break: break-all;
+      background: #f5f0ff;
+      z-index: 10;
+      position: relative;
+      padding: 2px 4px;
+      border-radius: 6px;
+    }
 
     /* History Overlay */
     #history-overlay {
@@ -259,7 +405,25 @@
       margin-bottom: 5px;
     }
     .entry-item .e-time { font-size: 11px; color: #999; }
-    .entry-item .e-num { font-size: 18px; font-weight: 800; }
+    .entry-item .e-num {
+      font-size: 18px;
+      font-weight: 800;
+      max-width: 60vw;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: block;
+      cursor: pointer;
+    }
+    .entry-item .e-num:hover {
+      white-space: normal;
+      word-break: break-all;
+      background: #f5f0ff;
+      z-index: 10;
+      position: relative;
+      padding: 2px 4px;
+      border-radius: 6px;
+    }
 
     .day-field-total {
       display: flex;
@@ -326,33 +490,7 @@
     ⚠️ This app requires JavaScript to work. Please enable JavaScript in your browser settings.
   </div>
 </noscript>
-<!-- Main Page -->
-<div id="main-page">
-  <div class="header">
-    <div>
-      <div style="font-size:18px;font-weight:700;">🙏 Daily Tracker</div>
-      <div style="font-size:11px;opacity:.82;margin-top:2px;">Daily Spiritual Count</div>
-    </div>
-    <button class="history-btn" onclick="openHistory()">📋 History</button>
-  </div>
 
-  <div class="date-strip">
-    <div class="label">Today's Date</div>
-    <div class="date-val" id="today-date"></div>
-  </div>
-
-  <div class="fields-container" id="fields-container"></div>
-
-  <!-- JS Error fallback -->
-  <div id="js-error" style="display:none;background:#ffdddd;color:#a00;padding:16px;text-align:center;font-size:16px;margin:16px;border-radius:10px;">
-    ⚠️ Something went wrong. Try refreshing or using a different browser.
-  </div>
-
-  <div class="totals-section">
-    <div class="totals-title">📊 All Time Total</div>
-    <div class="totals-grid" id="totals-grid"></div>
-  </div>
-</div>
 
 <!-- History Overlay -->
 <div id="history-overlay">
@@ -488,6 +626,31 @@ function addCount(fieldId) {
     inp.focus();
     return; 
   }
+  // Remove from pending if available
+  let pending = getPendingData();
+  let toRemove = val;
+  let changed = false;
+  // Remove from oldest pending first
+  for (let i = 0; i < pending.length && toRemove > 0; i++) {
+    if (pending[i].fieldId === fieldId && pending[i].count > 0) {
+      if (pending[i].count > toRemove) {
+        pending[i].count -= toRemove;
+        toRemove = 0;
+        changed = true;
+      } else {
+        toRemove -= pending[i].count;
+        pending[i].count = 0;
+        changed = true;
+      }
+    }
+  }
+  // Remove zeroed out pending
+  if (changed) {
+    pending = pending.filter(e => e.count > 0);
+    savePendingData(pending);
+    renderPendingTable && renderPendingTable();
+  }
+  // Add to main data
   const data = loadData();
   const today = todayStr();
   if (!data[today]) data[today] = {};
