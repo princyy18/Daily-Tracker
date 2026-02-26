@@ -521,15 +521,24 @@ const FIELDS = [
 
 function todayStr() {
   const d = new Date();
-  return d.toISOString().slice(0, 10);
+  return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 function nowTime() {
   const d = new Date();
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('en-US', { 
+    hour: '2-digit', 
+    minute: '2-digit',
+    timeZone: 'Asia/Kolkata'
+  });
 }
 function formatDate(str) {
-  const d = new Date(str);
-  return d.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+  const d = new Date(str + 'T00:00:00');
+  return d.toLocaleDateString('en-US', { 
+    day: 'numeric', 
+    month: 'long', 
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata'
+  });
 }
 
 function loadData() {
