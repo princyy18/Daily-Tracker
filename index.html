@@ -126,9 +126,36 @@ function setupPendingForm() {
     showToast('Pending count added');
   });
 }
+// Auto-add daily pending counts
+function autoAddDailyPending() {
+  const today = todayStr();
+  const data = getPendingData();
+
+  // Check if auto-pending for today already exists
+  const autoAddedToday = data.some(entry => entry.date === today && entry.autoAdded === true);
+
+  if (!autoAddedToday) {
+    // Auto-add counts for all 4 fields
+    const autoCounts = [
+      { fieldId: 'archavatar-stotra', count: 11 },
+      { fieldId: 'vandu-path', count: 4 },
+      { fieldId: 'janmangal-path', count: 3 },
+      { fieldId: 'namjap', count: 7000 }
+    ];
+
+    autoCounts.forEach(item => {
+      data.push({ date: today, fieldId: item.fieldId, count: item.count, autoAdded: true });
+    });
+
+    savePendingData(data);
+    showToast('✅ Daily pending counts auto-added');
+  }
+}
+
 // Setup pending tracker on page load
 document.addEventListener('DOMContentLoaded', function() {
   setupPendingForm();
+  autoAddDailyPending();
   renderPendingTable();
 });
 </script>
