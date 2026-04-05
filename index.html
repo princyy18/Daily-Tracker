@@ -130,26 +130,15 @@ function renderPendingTable() {
   let grandTotalMinutes = 0;
   FIELDS.forEach(f => {
     const totalCount = totals[f.id];
-
-    if (f.id === 'namjap') {
-      // Show both fast and slow times for namjap
-      const fastTime = calculateTimeRequired(f.id, totalCount, 'fast');
-      const slowTime = calculateTimeRequired(f.id, totalCount, 'slow');
-      grandTotalMinutes += fastTime; // Use fast time for grand total by default
-      const fastFormatted = formatTime(fastTime);
-      const slowFormatted = formatTime(slowTime);
-      html += `<li style="color:${f.color};font-size:14px;font-weight:600;margin-bottom:4px;"><div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span>${f.name}: ${totalCount}</span></div><div style="display:flex;justify-content:space-between;font-size:12px;color:#777;"><span>🚀 Fast</span><span>⏱️ ${fastFormatted}</span></div><div style="display:flex;justify-content:space-between;font-size:12px;color:#777;"><span>🐢 Slow</span><span>⏱️ ${slowFormatted}</span></div></li>`;
-    } else {
-      const totalTime = calculateTimeRequired(f.id, totalCount);
-      grandTotalMinutes += totalTime;
-      const timeFormatted = formatTime(totalTime);
-      html += `<li style="color:${f.color};font-size:14px;font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between;"><span>${f.name}: ${totalCount}</span><span style="color:#666;">⏱️ ${timeFormatted}</span></li>`;
-    }
+    const totalTime = f.id === 'namjap' ? calculateTimeRequired(f.id, totalCount, 'fast') : calculateTimeRequired(f.id, totalCount);
+    grandTotalMinutes += totalTime;
+    const timeFormatted = formatTime(totalTime);
+    html += `<li style="color:${f.color};font-size:14px;font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between;"><span>${f.name}: ${totalCount}</span><span style="color:#666;">⏱️ ${timeFormatted}</span></li>`;
   });
 
   // Add grand total time
   const grandTotalFormatted = formatTime(grandTotalMinutes);
-  html += `<li style="border-top:1px solid #d4c5f9;padding-top:8px;margin-top:8px;color:#6c3dc7;font-size:14px;font-weight:700;display:flex;justify-content:space-between;"><span>📊 Total Time (Fast)</span><span>${grandTotalFormatted}</span></li>`;
+  html += `<li style="border-top:1px solid #d4c5f9;padding-top:8px;margin-top:8px;color:#6c3dc7;font-size:14px;font-weight:700;display:flex;justify-content:space-between;"><span>📊 Total Time</span><span>${grandTotalFormatted}</span></li>`;
 
   html += '</ul></div>';
 
