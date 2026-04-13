@@ -793,7 +793,6 @@ function addCount(fieldId) {
   if (changed) {
     pending = pending.filter(e => e.count > 0);
     savePendingData(pending);
-    renderPendingTable && renderPendingTable();
   }
 
   // Add to main data
@@ -810,6 +809,10 @@ function addCount(fieldId) {
     navigator.vibrate(50);
   }
   showToast(`✅ ${val.toLocaleString('en-US')} added`);
+
+  // Always update pending table (for Daily Goal live update)
+  renderPendingTable && renderPendingTable();
+
   buildMainPage();
 }
 
