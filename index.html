@@ -112,52 +112,32 @@ function addPendingEntry(date, fieldId, count) {
 function getDailyGoalData() {
   try {
     const today = todayStr();
-    const allGoals = JSON.parse(localStorage.getItem('daily-goals') || '{}');
-    if (!allGoals[today]) {
-      // Initialize today's goals if not exists
-      const baseGoals = {
-        'archavatar-stotra': 22,
-        'vandu-path': 6,
-        'janmangal-path': 9,
-        'namjap': 13500
-      };
+    const baseGoals = {
+      'archavatar-stotra': 22,
+      'vandu-path': 6,
+      'janmangal-path': 9,
+      'namjap': 13500
+    };
 
-      // Check today's history to see what's already been completed
-      const data = loadData();
-      const todayData = data[today] || {};
+    // Always recalculate from today's history (not cached)
+    const data = loadData();
+    const todayData = data[today] || {};
 
-      // Subtract completed amounts from base goals
-      const remainingGoals = {};
-      FIELDS.forEach(f => {
-        const completed = todayData[f.id]
-          ? todayData[f.id].reduce((sum, entry) => sum + (entry.count || 0), 0)
-          : 0;
-        remainingGoals[f.id] = Math.max(0, baseGoals[f.id] - completed);
-      });
+    // Subtract completed amounts from base goals
+    const remainingGoals = {};
+    FIELDS.forEach(f => {
+      const completed = todayData[f.id]
+        ? todayData[f.id].reduce((sum, entry) => sum + (entry.count || 0), 0)
+        : 0;
+      remainingGoals[f.id] = Math.max(0, baseGoals[f.id] - completed);
+    });
 
-      allGoals[today] = remainingGoals;
-      localStorage.setItem('daily-goals', JSON.stringify(allGoals));
-    }
-    return allGoals[today];
+    return remainingGoals;
   } catch (e) {
     return {};
   }
 }
-function saveDailyGoalData(date, data) {
-  try {
-    const allGoals = JSON.parse(localStorage.getItem('daily-goals') || '{}');
-    allGoals[date] = data;
-    localStorage.setItem('daily-goals', JSON.stringify(allGoals));
-  } catch (e) {}
-}
-function decreaseDailyGoal(fieldId, amount) {
-  const today = todayStr();
-  const goals = getDailyGoalData();
-  if (goals[fieldId]) {
-    goals[fieldId] = Math.max(0, goals[fieldId] - amount);
-    saveDailyGoalData(today, goals);
-  }
-}
+// Daily goals are now calculated from history, no need to save separately
 
 function renderPendingTable() {
   let html = '';
@@ -815,9 +795,6 @@ function addCount(fieldId) {
     savePendingData(pending);
     renderPendingTable && renderPendingTable();
   }
-
-  // Also decrease daily goal
-  decreaseDailyGoal(fieldId, val);
 
   // Add to main data
   const data = loadData();
