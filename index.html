@@ -72,42 +72,6 @@ function savePendingData(data) {
   localStorage.setItem('pending-tracker', JSON.stringify(data));
 }
 
-// ====== DAILY GOAL TRACKER ======
-function getDailyGoalData() {
-  try {
-    const today = todayStr();
-    const allGoals = JSON.parse(localStorage.getItem('daily-goals') || '{}');
-    if (!allGoals[today]) {
-      // Initialize today's goals if not exists
-      allGoals[today] = {
-        'archavatar-stotra': 22,
-        'vandu-path': 6,
-        'janmangal-path': 9,
-        'namjap': 13500
-      };
-      localStorage.setItem('daily-goals', JSON.stringify(allGoals));
-    }
-    return allGoals[today];
-  } catch (e) {
-    return {};
-  }
-}
-function saveDailyGoalData(date, data) {
-  try {
-    const allGoals = JSON.parse(localStorage.getItem('daily-goals') || '{}');
-    allGoals[date] = data;
-    localStorage.setItem('daily-goals', JSON.stringify(allGoals));
-  } catch (e) {}
-}
-function decreaseDailyGoal(fieldId, amount) {
-  const today = todayStr();
-  const goals = getDailyGoalData();
-  if (goals[fieldId]) {
-    goals[fieldId] = Math.max(0, goals[fieldId] - amount);
-    saveDailyGoalData(today, goals);
-  }
-}
-
 // Calculate time required based on field and count
 function calculateTimeRequired(fieldId, count, mode = 'fast') {
   const timePerCount = {
@@ -144,6 +108,57 @@ function addPendingEntry(date, fieldId, count) {
   savePendingData(data);
 }
 
+// ====== DAILY GOAL TRACKER ======
+function getDailyGoalData() {
+  try {
+    const today = todayStr();
+    const allGoals = JSON.parse(localStorage.getItem('daily-goals') || '{}');
+    if (!allGoals[today]) {
+      // Initialize today's goals if not exists
+      const baseGoals = {
+        'archavatar-stotra': 22,
+        'vandu-path': 6,
+        'janmangal-path': 9,
+        'namjap': 13500
+      };
+
+      // Check today's history to see what's already been completed
+      const data = loadData();
+      const todayData = data[today] || {};
+
+      // Subtract completed amounts from base goals
+      const remainingGoals = {};
+      FIELDS.forEach(f => {
+        const completed = todayData[f.id]
+          ? todayData[f.id].reduce((sum, entry) => sum + (entry.count || 0), 0)
+          : 0;
+        remainingGoals[f.id] = Math.max(0, baseGoals[f.id] - completed);
+      });
+
+      allGoals[today] = remainingGoals;
+      localStorage.setItem('daily-goals', JSON.stringify(allGoals));
+    }
+    return allGoals[today];
+  } catch (e) {
+    return {};
+  }
+}
+function saveDailyGoalData(date, data) {
+  try {
+    const allGoals = JSON.parse(localStorage.getItem('daily-goals') || '{}');
+    allGoals[date] = data;
+    localStorage.setItem('daily-goals', JSON.stringify(allGoals));
+  } catch (e) {}
+}
+function decreaseDailyGoal(fieldId, amount) {
+  const today = todayStr();
+  const goals = getDailyGoalData();
+  if (goals[fieldId]) {
+    goals[fieldId] = Math.max(0, goals[fieldId] - amount);
+    saveDailyGoalData(today, goals);
+  }
+}
+
 function renderPendingTable() {
   let html = '';
 
@@ -151,17 +166,26 @@ function renderPendingTable() {
   const dailyGoals = getDailyGoalData();
   html += '<div style="background:linear-gradient(135deg, #6c3dc7, #a855a0);border-radius:12px;padding:16px;margin-bottom:20px;color:white;">';
   html += '<div style="font-weight:700;font-size:18px;margin-bottom:12px;">🎯 Today\'s Goal</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">';
+
+  let dailyTotalMinutes = 0;
   FIELDS.forEach(f => {
     const remaining = dailyGoals[f.id] || 0;
     const isCompleted = remaining === 0;
+    const timeRequired = f.id === 'namjap' ? calculateTimeRequired(f.id, remaining, 'fast') : calculateTimeRequired(f.id, remaining);
+    dailyTotalMinutes += timeRequired;
     html += `<div style="background:rgba(255,255,255,${isCompleted ? 0.1 : 0.15});border-radius:8px;padding:12px;text-align:center;border:2px solid ${isCompleted ? 'rgba(255,255,255,0.3)' : f.color};">
       <div style="font-size:12px;opacity:0.9;margin-bottom:4px;">${f.name}</div>
       <div style="font-size:28px;font-weight:800;">${remaining}</div>
       ${isCompleted ? '<div style="font-size:12px;color:#90EE90;">✅ Done!</div>' : ''}
     </div>`;
   });
-  html += '</div></div>';
+  html += '</div>';
+
+  // Daily goal total time
+  const dailyTimeFormatted = formatTime(dailyTotalMinutes);
+  html += `<div style="text-align:center;font-size:14px;opacity:0.95;"><strong>⏱️ Today\'s Time: ${dailyTimeFormatted}</strong></div>`;
+  html += '</div>';
 
   // === MAIN PENDING SECTION (BELOW) ===
   const data = getPendingData();
@@ -174,15 +198,23 @@ function renderPendingTable() {
     FIELDS.forEach(f => { totals[f.id] = 0; });
     data.forEach(entry => { if (totals[entry.fieldId] !== undefined) totals[entry.fieldId] += entry.count; });
 
-    // Build main pending summary
+    // Build main pending summary with time
     html += '<div style="background:#f5f0ff;border-radius:8px;padding:12px;margin-bottom:16px;">';
     html += '<div style="font-weight:700;color:#6c3dc7;margin-bottom:8px;font-size:14px;">📦 Main Pending (Backlog)</div>';
     html += '<ul style="list-style:none;padding:0;margin:0;">';
 
+    let backlogTotalMinutes = 0;
     FIELDS.forEach(f => {
       const totalCount = totals[f.id];
-      html += `<li style="color:${f.color};font-size:14px;font-weight:600;margin-bottom:4px;">${f.name}: <strong>${totalCount}</strong></li>`;
+      const timeRequired = f.id === 'namjap' ? calculateTimeRequired(f.id, totalCount, 'fast') : calculateTimeRequired(f.id, totalCount);
+      backlogTotalMinutes += timeRequired;
+      const timeFormatted = formatTime(timeRequired);
+      html += `<li style="color:${f.color};font-size:14px;font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between;"><span>${f.name}: ${totalCount}</span><span style="color:#666;">⏱️ ${timeFormatted}</span></li>`;
     });
+
+    // Add backlog grand total time
+    const backlogTotalFormatted = formatTime(backlogTotalMinutes);
+    html += `<li style="border-top:1px solid #d4c5f9;padding-top:8px;margin-top:8px;color:#6c3dc7;font-size:14px;font-weight:700;display:flex;justify-content:space-between;"><span>📊 Total Time</span><span>${backlogTotalFormatted}</span></li>`;
 
     html += '</ul></div>';
 
@@ -786,6 +818,7 @@ function addCount(fieldId) {
 
   // Also decrease daily goal
   decreaseDailyGoal(fieldId, val);
+
   // Add to main data
   const data = loadData();
   const today = todayStr();
