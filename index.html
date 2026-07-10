@@ -47,13 +47,16 @@
         </select>
         <button type="submit" style="background:#6c3dc7;color:#fff;padding:8px 18px;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer;">Add Pending</button>
       </form>
-      <!-- Period skip controls -->
-      <div style="background:#fff0f5;border:1px solid #f3c6d8;border-radius:10px;padding:10px 12px;margin-bottom:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <span id="period-status" style="flex:1;min-width:140px;font-size:13px;color:#a03060;font-weight:600;"></span>
-        <button type="button" onclick="startPeriodSkip()" style="background:#d6336c;color:#fff;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;min-height:44px;">🩸 Period Start</button>
-        <button type="button" onclick="clearPeriodSkip()" style="background:#eee;color:#a03060;border:none;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;min-height:44px;">Clear</button>
-      </div>
       <div id="pending-table-container"></div>
+      <!-- Period skip controls: small + at the very bottom, and confirm() guarded,
+           so it can't be tapped by accident (used only ~once a month) -->
+      <div style="margin-top:26px;padding-top:10px;border-top:1px dashed #e3d5ee;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span id="period-status" style="font-size:11px;color:#b99cc9;"></span>
+        <span style="white-space:nowrap;">
+          <button type="button" onclick="startPeriodSkip()" style="background:none;border:1px solid #e6b8cc;color:#c2588a;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;">🩸 Period</button>
+          <button type="button" onclick="clearPeriodSkip()" style="background:none;border:none;color:#c9b3d6;font-size:11px;cursor:pointer;padding:4px 6px;">clear</button>
+        </span>
+      </div>
     </div>
   </div>
 <script>
@@ -259,11 +262,16 @@ function startPeriodSkip() {
   const today = todayStr();
   const skipFrom = addDaysStr(today, 1);
   const skipTo = addDaysStr(today, 3);
+  // Confirm guard against accidental taps (used only ~once a month)
+  if (!confirm(`🩸 Period skip set karvu?\n\n${skipFrom} → ${skipTo}\n(aa 3 divas auto-add nahi thaay)`)) return;
   savePeriodSkip({ skipFrom, skipTo });
   renderPeriodStatus();
   showToast(`🩸 Skip set: ${skipFrom} → ${skipTo}`);
 }
 function clearPeriodSkip() {
+  const { skipFrom, skipTo } = getPeriodSkip();
+  if (!skipFrom && !skipTo) { showToast('No skip set'); return; }
+  if (!confirm('Period skip clear karvu?')) return;
   savePeriodSkip({ skipFrom: null, skipTo: null });
   renderPeriodStatus();
   showToast('Skip cleared');
