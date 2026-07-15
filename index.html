@@ -10,26 +10,20 @@
         <button class="pending-btn" onclick="openPending()" style="background:rgba(255,255,255,.22);border:none;color:white;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;min-height:44px;">⏳ Pending</button>
       </div>
     </div>
-
     <div class="date-strip">
       <div class="label">Today's Date</div>
       <div class="date-val" id="today-date"></div>
     </div>
-
     <div class="fields-container" id="fields-container"></div>
-
     <!-- JS Error fallback -->
     <div id="js-error" style="display:none;background:#ffdddd;color:#a00;padding:16px;text-align:center;font-size:16px;margin:16px;border-radius:10px;">
       ⚠️ Something went wrong. Try refreshing or using a different browser.
     </div>
-
     <div class="totals-section">
       <div class="totals-title">📊 All Time Total</div>
       <div class="totals-grid" id="totals-grid"></div>
     </div>
   </div>
-
-
   <!-- Pending Count Tracker Overlay (hidden by default) -->
   <div id="pending-overlay" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(245,240,255,0.98);overflow-y:auto;-webkit-overflow-scrolling:touch;">
     <div style="max-width:600px;margin:40px auto 24px auto;padding:20px 12px 18px 12px;background:#faf8ff;border-radius:16px;box-shadow:0 2px 12px rgba(108,61,199,.13);">
@@ -48,6 +42,15 @@
         <button type="submit" style="background:#6c3dc7;color:#fff;padding:8px 18px;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer;">Add Pending</button>
       </form>
       <div id="pending-table-container"></div>
+      <!-- Period skip controls: small + at the very bottom, and confirm() guarded,
+           so it can't be tapped by accident (used only ~once a month) -->
+      <div style="margin-top:26px;padding-top:10px;border-top:1px dashed #e3d5ee;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span id="period-status" style="font-size:11px;color:#b99cc9;"></span>
+        <span style="white-space:nowrap;">
+          <button type="button" onclick="startPeriodSkip()" style="background:none;border:1px solid #e6b8cc;color:#c2588a;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;">🩸 Period</button>
+          <button type="button" onclick="clearPeriodSkip()" style="background:none;border:none;color:#c9b3d6;font-size:11px;cursor:pointer;padding:4px 6px;">clear</button>
+        </span>
+      </div>
     </div>
   </div>
 <script>
@@ -71,7 +74,6 @@ function getPendingData() {
 function savePendingData(data) {
   localStorage.setItem('pending-tracker', JSON.stringify(data));
 }
-
 // Calculate time required based on field and count
 function calculateTimeRequired(fieldId, count, mode = 'fast') {
   const timePerCount = {
@@ -81,33 +83,28 @@ function calculateTimeRequired(fieldId, count, mode = 'fast') {
     'namjap-fast': 1/85,            // 1 minute per 85 count (fast)
     'namjap-slow': 1/45             // 1 minute per 45 count (slow)
   };
-
   // For namjap, use the mode-specific key
   const key = fieldId === 'namjap' ? `namjap-${mode}` : fieldId;
   const minutesPerUnit = timePerCount[key] || 0;
   const totalMinutes = count * minutesPerUnit;
   return totalMinutes;
 }
-
 // Format minutes to readable time (e.g., "1h 22m" or "45m")
 function formatTime(minutes) {
   if (minutes < 1) return '< 1m';
   const hours = Math.floor(minutes / 60);
   const mins = Math.round(minutes % 60);
-
   if (hours > 0) {
     return `${hours}h ${mins}m`;
   } else {
     return `${Math.round(minutes)}m`;
   }
 }
-
 function addPendingEntry(date, fieldId, count) {
   const data = getPendingData();
   data.push({ date, fieldId, count });
   savePendingData(data);
 }
-
 // ====== DAILY GOAL TRACKER ======
 function getDailyGoalData() {
   try {
@@ -118,11 +115,9 @@ function getDailyGoalData() {
       'janmangal-path': 11,
       'namjap': 25000
     };
-
     // Always recalculate from today's history (not cached)
     const data = loadData();
     const todayData = data[today] || {};
-
     // Subtract completed amounts from base goals
     const remainingGoals = {};
     FIELDS.forEach(f => {
@@ -131,23 +126,19 @@ function getDailyGoalData() {
         : 0;
       remainingGoals[f.id] = Math.max(0, baseGoals[f.id] - completed);
     });
-
     return remainingGoals;
   } catch (e) {
     return {};
   }
 }
 // Daily goals are now calculated from history, no need to save separately
-
 function renderPendingTable() {
   let html = '';
-
   // === DAILY GOAL SECTION (TOP - MORE PROMINENT) ===
   const dailyGoals = getDailyGoalData();
   html += '<div style="background:linear-gradient(135deg, #6c3dc7, #a855a0);border-radius:12px;padding:16px;margin-bottom:20px;color:white;">';
   html += '<div style="font-weight:700;font-size:18px;margin-bottom:12px;">🎯 Today\'s Goal</div>';
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">';
-
   let dailyTotalMinutes = 0;
   FIELDS.forEach(f => {
     const remaining = dailyGoals[f.id] || 0;
@@ -161,28 +152,23 @@ function renderPendingTable() {
     </div>`;
   });
   html += '</div>';
-
   // Daily goal total time
   const dailyTimeFormatted = formatTime(dailyTotalMinutes);
   html += `<div style="text-align:center;font-size:14px;opacity:0.95;"><strong>⏱️ Today\'s Time: ${dailyTimeFormatted}</strong></div>`;
   html += '</div>';
-
   // === MAIN PENDING SECTION (BELOW) ===
   const data = getPendingData();
   if (data.length > 0) {
     // Sort by date descending
     data.sort((a, b) => b.date.localeCompare(a.date));
-
     // Calculate totals
     const totals = {};
     FIELDS.forEach(f => { totals[f.id] = 0; });
     data.forEach(entry => { if (totals[entry.fieldId] !== undefined) totals[entry.fieldId] += entry.count; });
-
     // Build main pending summary with time
     html += '<div style="background:#f5f0ff;border-radius:8px;padding:12px;margin-bottom:16px;">';
     html += '<div style="font-weight:700;color:#6c3dc7;margin-bottom:8px;font-size:14px;">📦 Main Pending (Backlog)</div>';
     html += '<ul style="list-style:none;padding:0;margin:0;">';
-
     let backlogTotalMinutes = 0;
     FIELDS.forEach(f => {
       const totalCount = totals[f.id];
@@ -191,13 +177,10 @@ function renderPendingTable() {
       const timeFormatted = formatTime(timeRequired);
       html += `<li style="color:${f.color};font-size:14px;font-weight:600;margin-bottom:4px;display:flex;justify-content:space-between;"><span>${f.name}: ${totalCount}</span><span style="color:#666;">⏱️ ${timeFormatted}</span></li>`;
     });
-
     // Add backlog grand total time
     const backlogTotalFormatted = formatTime(backlogTotalMinutes);
     html += `<li style="border-top:1px solid #d4c5f9;padding-top:8px;margin-top:8px;color:#6c3dc7;font-size:14px;font-weight:700;display:flex;justify-content:space-between;"><span>📊 Total Time</span><span>${backlogTotalFormatted}</span></li>`;
-
     html += '</ul></div>';
-
     // Build detailed table
     html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
     html += '<thead><tr style="background:#ede9ff;"><th style="padding:8px 4px;text-align:left;">Date</th><th style="padding:8px 4px;text-align:left;">Field</th><th style="padding:8px 4px;text-align:right;">Count</th></tr></thead><tbody>';
@@ -209,10 +192,8 @@ function renderPendingTable() {
   } else {
     html += '<div style="color:#aaa;text-align:center;padding:18px;">No pending entries yet</div>';
   }
-
   document.getElementById('pending-table-container').innerHTML = html;
 }
-
 function setupPendingForm() {
   const form = document.getElementById('pending-form');
   form.addEventListener('submit', function(e) {
@@ -229,46 +210,91 @@ function setupPendingForm() {
     showToast('Pending count added');
   });
 }
-// Period skip window (YYYY-MM-DD, Asia/Kolkata). Keep in sync with period-skip.json.
-// Set both to null to clear. App skips auto-add when SKIP_FROM <= today <= SKIP_TO.
-const SKIP_FROM = "2026-06-26";
-const SKIP_TO   = "2026-06-28";
-
+// ====== PERIOD SKIP (localStorage-based, set via 🩸 button in Pending overlay) ======
+// Convention: period-start day itself is NOT skipped; skip = start+1 .. start+3.
+// Note: the Claude scheduled task uses period-skip.json separately — this only
+// controls the in-app auto-add.
+function getPeriodSkip() {
+  try {
+    return JSON.parse(localStorage.getItem('period-skip') || 'null') || { skipFrom: null, skipTo: null };
+  } catch (e) {
+    return { skipFrom: null, skipTo: null };
+  }
+}
+function savePeriodSkip(s) {
+  localStorage.setItem('period-skip', JSON.stringify(s));
+}
+// Timezone-safe date arithmetic on YYYY-MM-DD strings
+function addDaysStr(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+function startPeriodSkip() {
+  const today = todayStr();
+  const skipFrom = addDaysStr(today, 1);
+  const skipTo = addDaysStr(today, 3);
+  // Confirm guard against accidental taps (used only ~once a month)
+  if (!confirm(`🩸 Period skip set karvu?\n\n${skipFrom} → ${skipTo}\n(aa 3 divas auto-add nahi thaay)`)) return;
+  savePeriodSkip({ skipFrom, skipTo });
+  renderPeriodStatus();
+  showToast(`🩸 Skip set: ${skipFrom} → ${skipTo}`);
+}
+function clearPeriodSkip() {
+  const { skipFrom, skipTo } = getPeriodSkip();
+  if (!skipFrom && !skipTo) { showToast('No skip set'); return; }
+  if (!confirm('Period skip clear karvu?')) return;
+  savePeriodSkip({ skipFrom: null, skipTo: null });
+  renderPeriodStatus();
+  showToast('Skip cleared');
+}
+function renderPeriodStatus() {
+  const el = document.getElementById('period-status');
+  if (!el) return;
+  const { skipFrom, skipTo } = getPeriodSkip();
+  const today = todayStr();
+  if (skipFrom && skipTo && today <= skipTo) {
+    el.textContent = `Skip: ${skipFrom} → ${skipTo}${today >= skipFrom ? ' (active)' : ''}`;
+  } else {
+    el.textContent = 'No skip set';
+  }
+}
 // Auto-add daily pending counts
 function autoAddDailyPending() {
   const today = todayStr();
   const data = getPendingData();
-
   // Period skip: don't auto-add on days within the skip window.
-  if (SKIP_FROM && SKIP_TO && today >= SKIP_FROM && today <= SKIP_TO) {
+  const { skipFrom, skipTo } = getPeriodSkip();
+  if (skipFrom && skipTo && today >= skipFrom && today <= skipTo) {
     return;
   }
-
-  // Check if auto-pending for today already exists
+  // Check if auto-pending for today already exists.
+  // NOTE: pending entries alone are NOT a reliable marker — addCount() deletes
+  // them once completed, which caused a same-day double auto-add. So we also
+  // keep a persistent per-day marker in localStorage ('last-auto-add-date').
   const autoAddedToday = data.some(entry => entry.date === today && entry.autoAdded === true);
-
-  if (!autoAddedToday) {
-    // Auto-add counts for all 4 fields
+  const lastAutoAddDate = localStorage.getItem('last-auto-add-date');
+  if (!autoAddedToday && lastAutoAddDate !== today) {
+    // Auto-add daily goal counts (vandu goal is 0, so it is not auto-added)
     const autoCounts = [
       { fieldId: 'archavatar-stotra', count: 1 },
       { fieldId: 'janmangal-path', count: 11 },
       { fieldId: 'namjap', count: 25000 }
     ];
-
     autoCounts.forEach(item => {
       data.push({ date: today, fieldId: item.fieldId, count: item.count, autoAdded: true });
     });
-
     savePendingData(data);
+    localStorage.setItem('last-auto-add-date', today);
     showToast('✅ Daily pending counts auto-added');
   }
 }
-
 // Setup pending tracker on page load
 document.addEventListener('DOMContentLoaded', function() {
   setupPendingForm();
   autoAddDailyPending();
   renderPendingTable();
+  renderPeriodStatus();
 });
 </script>
 <!-- ...replaced with contents of daily-tracker-mobile.html... -->
@@ -282,7 +308,6 @@ document.addEventListener('DOMContentLoaded', function() {
   <style>
     /* Reset and Base */
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       background: linear-gradient(135deg, #f5f0ff 0%, #ffe8f0 100%);
@@ -292,10 +317,8 @@ document.addEventListener('DOMContentLoaded', function() {
       -webkit-user-select: none;
       user-select: none;
     }
-
     /* Prevent zoom on input focus */
     input[type="number"] { font-size: 16px !important; }
-
     /* Header */
     .header {
       background: linear-gradient(135deg, #6c3dc7, #a855a0);
@@ -309,10 +332,8 @@ document.addEventListener('DOMContentLoaded', function() {
       top: 0;
       z-index: 100;
     }
-    
     .header h1 { font-size: 18px; font-weight: 700; }
     .header .subtitle { font-size: 11px; opacity: .82; margin-top: 2px; }
-    
     .history-btn {
       background: rgba(255,255,255,.22);
       border: none;
@@ -327,7 +348,6 @@ document.addEventListener('DOMContentLoaded', function() {
       min-height: 44px;
     }
     .history-btn:active { background: rgba(255,255,255,.34); }
-
     /* Date Strip */
     .date-strip {
       background: white;
@@ -341,10 +361,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     .date-strip .label { font-size: 12px; color: #888; }
     .date-strip .date-val { font-size: 15px; font-weight: 700; color: #6c3dc7; }
-
     /* Field Cards */
     .fields-container { padding: 8px 16px; }
-
     .field-card {
       background: white;
       border-radius: 16px;
@@ -353,7 +371,6 @@ document.addEventListener('DOMContentLoaded', function() {
       overflow: hidden;
       border-top: 4px solid var(--accent);
     }
-
     .field-header {
       padding: 12px 16px 6px;
       display: flex;
@@ -361,16 +378,13 @@ document.addEventListener('DOMContentLoaded', function() {
       justify-content: space-between;
     }
     .field-name { font-size: 16px; font-weight: 700; color: var(--accent); }
-
     .field-body { padding: 8px 16px 12px; }
-
     .input-row {
       display: flex;
       gap: 8px;
       align-items: center;
       margin-bottom: 8px;
     }
-    
     .input-row input {
       flex: 1;
       border: 2px solid #e5e7eb;
@@ -385,15 +399,12 @@ document.addEventListener('DOMContentLoaded', function() {
       -webkit-appearance: none;
       -moz-appearance: textfield;
     }
-    
     .input-row input::-webkit-outer-spin-button,
     .input-row input::-webkit-inner-spin-button {
       -webkit-appearance: none;
       margin: 0;
     }
-    
     .input-row input:focus { border-color: var(--accent); }
-    
     .add-btn {
       background: var(--accent);
       color: white;
@@ -409,7 +420,6 @@ document.addEventListener('DOMContentLoaded', function() {
       min-height: 44px;
     }
     .add-btn:active { transform: scale(.96); opacity: .85; }
-
     /* Totals Section */
     .totals-section {
       margin: 6px 16px 24px;
@@ -418,7 +428,6 @@ document.addEventListener('DOMContentLoaded', function() {
       overflow: hidden;
       box-shadow: 0 2px 12px rgba(0,0,0,.07);
     }
-    
     .totals-title {
       background: linear-gradient(135deg, #6c3dc7, #a855a0);
       color: white;
@@ -427,14 +436,12 @@ document.addEventListener('DOMContentLoaded', function() {
       font-weight: 700;
       font-size: 15px;
     }
-    
     .totals-grid {
       display: flex;
       flex-direction: column;
       gap: 1px;
       background: #f0f0f0;
     }
-    
     .total-item {
       background: white;
       padding: 14px 10px;
@@ -460,7 +467,6 @@ document.addEventListener('DOMContentLoaded', function() {
       padding: 2px 4px;
       border-radius: 6px;
     }
-
     /* History Overlay */
     #history-overlay {
       display: none;
@@ -472,7 +478,6 @@ document.addEventListener('DOMContentLoaded', function() {
       -webkit-overflow-scrolling: touch;
     }
     #history-overlay.open { display: block; }
-
     .hist-header {
       background: linear-gradient(135deg, #6c3dc7, #a855a0);
       color: white;
@@ -486,7 +491,6 @@ document.addEventListener('DOMContentLoaded', function() {
       box-shadow: 0 3px 12px rgba(108,61,199,.35);
     }
     .hist-header h2 { font-size: 18px; font-weight: 700; }
-    
     .back-btn {
       background: rgba(255,255,255,.22);
       border: none;
@@ -499,9 +503,7 @@ document.addEventListener('DOMContentLoaded', function() {
       -webkit-tap-highlight-color: transparent;
       min-height: 44px;
     }
-
     .hist-content { padding: 14px 16px; }
-
     /* Date Groups */
     .date-group {
       background: white;
@@ -510,7 +512,6 @@ document.addEventListener('DOMContentLoaded', function() {
       box-shadow: 0 2px 8px rgba(0,0,0,.06);
       overflow: hidden;
     }
-    
     .date-group-header {
       background: linear-gradient(90deg, #6c3dc7, #a855a0);
       color: white;
@@ -524,13 +525,11 @@ document.addEventListener('DOMContentLoaded', function() {
       -webkit-tap-highlight-color: transparent;
       min-height: 44px;
     }
-
     .field-section {
       border-bottom: 1px solid #f0eeff;
       padding: 10px 16px;
     }
     .field-section:last-child { border-bottom: none; }
-    
     .field-sec-header {
       font-size: 13px;
       font-weight: 700;
@@ -539,7 +538,6 @@ document.addEventListener('DOMContentLoaded', function() {
       align-items: center;
       justify-content: space-between;
     }
-
     .entry-item {
       display: flex;
       align-items: center;
@@ -569,7 +567,6 @@ document.addEventListener('DOMContentLoaded', function() {
       padding: 2px 4px;
       border-radius: 6px;
     }
-
     .day-field-total {
       display: flex;
       justify-content: space-between;
@@ -581,14 +578,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     .day-field-total .dt-label { font-size: 12px; color: #6c3dc7; font-weight: 700; }
     .day-field-total .dt-val { font-size: 20px; font-weight: 900; }
-
     .empty-msg {
       text-align: center;
       color: #aaa;
       padding: 40px 20px;
       font-size: 14px;
     }
-
     /* Toast */
     #toast {
       position: fixed;
@@ -609,7 +604,6 @@ document.addEventListener('DOMContentLoaded', function() {
       max-width: 90vw;
     }
     #toast.show { opacity: 1; }
-
     /* Mobile Optimizations */
     @media (max-width: 480px) {
       .header { padding: 12px 16px; }
@@ -617,7 +611,6 @@ document.addEventListener('DOMContentLoaded', function() {
       .total-item .t-val { font-size: 24px; }
       .field-name { font-size: 15px; }
     }
-
     @media (orientation: landscape) and (max-height: 600px) {
       .header { padding: 8px 20px; }
       .date-strip { margin: 8px 16px 4px; }
@@ -627,16 +620,12 @@ document.addEventListener('DOMContentLoaded', function() {
   </style>
 </head>
 <body>
-
 <div id="fields-debug" style="background:#e3f7ff;color:#0a3d62;padding:8px;font-size:13px;display:none;white-space:pre-wrap;"></div>
-
 <noscript>
   <div style="background:#ffdddd;color:#a00;padding:16px;text-align:center;font-size:16px;">
     ⚠️ This app requires JavaScript to work. Please enable JavaScript in your browser settings.
   </div>
 </noscript>
-
-
 <!-- History Overlay -->
 <div id="history-overlay">
   <div class="hist-header">
@@ -645,17 +634,12 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
   <div class="hist-content" id="hist-content"></div>
 </div>
-
 <!-- Toast -->
 <div id="toast"></div>
-
 <!-- Debug Console -->
 <div id="debug-console" style="display:none;background:#222;color:#fff;padding:10px;font-size:13px;position:fixed;bottom:0;left:0;right:0;z-index:9999;max-height:30vh;overflow:auto;"></div>
-
 <!-- ...existing code... -->
-
 <script>
-
 // ====== DATA & FIELDS ======
 const FIELDS = [
   { id: 'archavatar-stotra', name: 'આર્ચાવતાર સ્તોત્ર', color: '#6c3dc7', icon: '📜' },
@@ -663,29 +647,27 @@ const FIELDS = [
   { id: 'janmangal-path', name: 'જનમંગલ પાઠ', color: '#388e3c', icon: '📿' },
   { id: 'namjap', name: 'નામજાપ', color: '#1976d2', icon: '🔱' }
 ];
-
 function todayStr() {
   const d = new Date();
   return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 }
 function nowTime() {
   const d = new Date();
-  return d.toLocaleTimeString('en-US', { 
-    hour: '2-digit', 
+  return d.toLocaleTimeString('en-US', {
+    hour: '2-digit',
     minute: '2-digit',
     timeZone: 'Asia/Kolkata'
   });
 }
 function formatDate(str) {
   const d = new Date(str + 'T00:00:00');
-  return d.toLocaleDateString('en-US', { 
-    day: 'numeric', 
-    month: 'long', 
+  return d.toLocaleDateString('en-US', {
+    day: 'numeric',
+    month: 'long',
     year: 'numeric',
     timeZone: 'Asia/Kolkata'
   });
 }
-
 function loadData() {
   try {
     return JSON.parse(localStorage.getItem('spiritual-tracker') || '{}');
@@ -696,7 +678,6 @@ function loadData() {
 function saveData(data) {
   localStorage.setItem('spiritual-tracker', JSON.stringify(data));
 }
-
 function calcTotal(data, fieldId) {
   let total = 0;
   Object.values(data).forEach(day => {
@@ -710,7 +691,6 @@ function calcDayFieldTotal(entries) {
   if (!entries) return 0;
   return entries.reduce((s, e) => s + (e.count || 0), 0);
 }
-
 // ====== MAIN PAGE RENDER ======
 function buildMainPage() {
   try {
@@ -740,7 +720,6 @@ function buildMainPage() {
     showJsError('Main page render failed: ' + e);
   }
 }
-
 function showJsError(msg) {
   var el = document.getElementById('js-error');
   if (el) {
@@ -748,7 +727,24 @@ function showJsError(msg) {
     el.textContent = 'Error: ' + msg;
   }
 }
-
+// ====== NAMJAP LIFETIME GOAL (1 crore) ======
+const NAMJAP_GOAL = 10000000; // 1 કરોડ
+function namjapProgressHTML(total) {
+  const pct = Math.min(100, (total / NAMJAP_GOAL) * 100);
+  const remaining = Math.max(0, NAMJAP_GOAL - total);
+  const pctLabel = (pct >= 100 ? '100' : pct < 10 ? pct.toFixed(2) : pct.toFixed(1)) + '%';
+  return `
+      <div style="margin-top:10px;padding:0 8px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
+          <span style="font-size:11px;font-weight:700;color:#1976d2;">🎯 ૧ કરોડ Goal</span>
+          <span style="font-size:13px;font-weight:800;color:#1976d2;">${pctLabel}</span>
+        </div>
+        <div style="height:10px;background:#e3ecf7;border-radius:6px;overflow:hidden;">
+          <div style="height:100%;width:${Math.max(pct, 0.4)}%;background:linear-gradient(90deg,#1976d2,#42a5f5,#7e57c2);border-radius:6px;transition:width .6s ease;"></div>
+        </div>
+        <div style="font-size:10px;color:#b6bfca;margin-top:4px;text-align:right;">બાકી: ${remaining.toLocaleString('en-US')}</div>
+      </div>`;
+}
 function buildTotals(data) {
   try {
     const tg = document.getElementById('totals-grid');
@@ -763,6 +759,7 @@ function buildTotals(data) {
         <div class="total-item">
           <div class="t-name">${f.name}</div>
           <div class="t-val" style="color:${f.color}" id="total-${f.id}">${total.toLocaleString('en-US')}</div>
+          ${f.id === 'namjap' ? namjapProgressHTML(total) : ''}
         </div>`;
     });
     tg.innerHTML = totalsHTML;
@@ -771,14 +768,13 @@ function buildTotals(data) {
     console.error('Error building totals:', error);
   }
 }
-
 function addCount(fieldId) {
   const inp = document.getElementById(`inp-${fieldId}`);
   const val = parseInt(inp.value, 10);
-  if (!val || val <= 0) { 
-    showToast('⚠️ Please enter a valid number'); 
+  if (!val || val <= 0) {
+    showToast('⚠️ Please enter a valid number');
     inp.focus();
-    return; 
+    return;
   }
   // Remove from pending if available
   let pending = getPendingData();
@@ -803,7 +799,6 @@ function addCount(fieldId) {
     pending = pending.filter(e => e.count > 0);
     savePendingData(pending);
   }
-
   // Add to main data
   const data = loadData();
   const today = todayStr();
@@ -818,13 +813,10 @@ function addCount(fieldId) {
     navigator.vibrate(50);
   }
   showToast(`✅ ${val.toLocaleString('en-US')} added`);
-
   // Always update pending table (for Daily Goal live update)
   renderPendingTable && renderPendingTable();
-
   buildMainPage();
 }
-
 // ====== HISTORY ======
 function openHistory() {
   document.getElementById('history-overlay').classList.add('open');
@@ -879,7 +871,6 @@ function renderHistory() {
       </div>`;
   }).join('');
 }
-
 // ====== UTILITIES ======
 let toastTimer;
 function showToast(msg) {
@@ -889,7 +880,6 @@ function showToast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
 }
-
 // Prevent zoom on double tap
 let lastTouchEnd = 0;
 document.addEventListener('touchend', function (event) {
@@ -899,7 +889,6 @@ document.addEventListener('touchend', function (event) {
   }
   lastTouchEnd = now;
 }, false);
-
 // ====== INITIALIZATION ======
 function init() {
   try {
@@ -916,12 +905,9 @@ function init() {
     showJsError('Initialization failed: ' + e);
   }
 }
-
 // Robust single initialization
 document.addEventListener('DOMContentLoaded', init);
 </script>
-
 </script>
-
 </body>
 </html>
