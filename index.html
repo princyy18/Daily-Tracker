@@ -48,15 +48,6 @@
         <button type="submit" style="background:#6c3dc7;color:#fff;padding:8px 18px;border:none;border-radius:7px;font-size:15px;font-weight:700;cursor:pointer;">Add Pending</button>
       </form>
       <div id="pending-table-container"></div>
-      <!-- Period skip controls: small + at the very bottom, and confirm() guarded,
-           so it can't be tapped by accident (used only ~once a month) -->
-      <div style="margin-top:26px;padding-top:10px;border-top:1px dashed #e3d5ee;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <span id="period-status" style="font-size:11px;color:#b99cc9;"></span>
-        <span style="white-space:nowrap;">
-          <button type="button" onclick="startPeriodSkip()" style="background:none;border:1px solid #e6b8cc;color:#c2588a;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;">🩸 Period</button>
-          <button type="button" onclick="clearPeriodSkip()" style="background:none;border:none;color:#c9b3d6;font-size:11px;cursor:pointer;padding:4px 6px;">clear</button>
-        </span>
-      </div>
     </div>
   </div>
 <script>
@@ -122,10 +113,10 @@ function getDailyGoalData() {
   try {
     const today = todayStr();
     const baseGoals = {
-      'archavatar-stotra': 11,
-      'vandu-path': 4,
+      'archavatar-stotra': 1,
+      'vandu-path': 0,
       'janmangal-path': 11,
-      'namjap': 10000
+      'namjap': 25000
     };
 
     // Always recalculate from today's history (not cached)
@@ -238,55 +229,10 @@ function setupPendingForm() {
     showToast('Pending count added');
   });
 }
-// ====== PERIOD SKIP (localStorage-based, set via 🩸 button in Pending overlay) ======
-// Convention: period-start day itself is NOT skipped; skip = start+1 .. start+3.
-// Note: the Claude scheduled task uses period-skip.json separately — this only
-// controls the in-app auto-add.
-function getPeriodSkip() {
-  try {
-    return JSON.parse(localStorage.getItem('period-skip') || 'null') || { skipFrom: null, skipTo: null };
-  } catch (e) {
-    return { skipFrom: null, skipTo: null };
-  }
-}
-function savePeriodSkip(s) {
-  localStorage.setItem('period-skip', JSON.stringify(s));
-}
-// Timezone-safe date arithmetic on YYYY-MM-DD strings
-function addDaysStr(dateStr, n) {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(y, m - 1, d + n);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-}
-function startPeriodSkip() {
-  const today = todayStr();
-  const skipFrom = addDaysStr(today, 1);
-  const skipTo = addDaysStr(today, 3);
-  // Confirm guard against accidental taps (used only ~once a month)
-  if (!confirm(`🩸 Period skip set karvu?\n\n${skipFrom} → ${skipTo}\n(aa 3 divas auto-add nahi thaay)`)) return;
-  savePeriodSkip({ skipFrom, skipTo });
-  renderPeriodStatus();
-  showToast(`🩸 Skip set: ${skipFrom} → ${skipTo}`);
-}
-function clearPeriodSkip() {
-  const { skipFrom, skipTo } = getPeriodSkip();
-  if (!skipFrom && !skipTo) { showToast('No skip set'); return; }
-  if (!confirm('Period skip clear karvu?')) return;
-  savePeriodSkip({ skipFrom: null, skipTo: null });
-  renderPeriodStatus();
-  showToast('Skip cleared');
-}
-function renderPeriodStatus() {
-  const el = document.getElementById('period-status');
-  if (!el) return;
-  const { skipFrom, skipTo } = getPeriodSkip();
-  const today = todayStr();
-  if (skipFrom && skipTo && today <= skipTo) {
-    el.textContent = `Skip: ${skipFrom} → ${skipTo}${today >= skipFrom ? ' (active)' : ''}`;
-  } else {
-    el.textContent = 'No skip set';
-  }
-}
+// Period skip window (YYYY-MM-DD, Asia/Kolkata). Keep in sync with period-skip.json.
+// Set both to null to clear. App skips auto-add when SKIP_FROM <= today <= SKIP_TO.
+const SKIP_FROM = "2026-06-26";
+const SKIP_TO   = "2026-06-28";
 
 // Auto-add daily pending counts
 function autoAddDailyPending() {
@@ -294,25 +240,19 @@ function autoAddDailyPending() {
   const data = getPendingData();
 
   // Period skip: don't auto-add on days within the skip window.
-  const { skipFrom, skipTo } = getPeriodSkip();
-  if (skipFrom && skipTo && today >= skipFrom && today <= skipTo) {
+  if (SKIP_FROM && SKIP_TO && today >= SKIP_FROM && today <= SKIP_TO) {
     return;
   }
 
-  // Check if auto-pending for today already exists.
-  // NOTE: pending entries alone are NOT a reliable marker — addCount() deletes
-  // them once completed, which caused a same-day double auto-add. So we also
-  // keep a persistent per-day marker in localStorage ('last-auto-add-date').
+  // Check if auto-pending for today already exists
   const autoAddedToday = data.some(entry => entry.date === today && entry.autoAdded === true);
-  const lastAutoAddDate = localStorage.getItem('last-auto-add-date');
 
-  if (!autoAddedToday && lastAutoAddDate !== today) {
+  if (!autoAddedToday) {
     // Auto-add counts for all 4 fields
     const autoCounts = [
-      { fieldId: 'archavatar-stotra', count: 11 },
-      { fieldId: 'vandu-path', count: 4 },
+      { fieldId: 'archavatar-stotra', count: 1 },
       { fieldId: 'janmangal-path', count: 11 },
-      { fieldId: 'namjap', count: 10000 }
+      { fieldId: 'namjap', count: 25000 }
     ];
 
     autoCounts.forEach(item => {
@@ -320,7 +260,6 @@ function autoAddDailyPending() {
     });
 
     savePendingData(data);
-    localStorage.setItem('last-auto-add-date', today);
     showToast('✅ Daily pending counts auto-added');
   }
 }
@@ -330,7 +269,6 @@ document.addEventListener('DOMContentLoaded', function() {
   setupPendingForm();
   autoAddDailyPending();
   renderPendingTable();
-  renderPeriodStatus();
 });
 </script>
 <!-- ...replaced with contents of daily-tracker-mobile.html... -->
@@ -344,7 +282,7 @@ document.addEventListener('DOMContentLoaded', function() {
   <style>
     /* Reset and Base */
     * { box-sizing: border-box; margin: 0; padding: 0; }
-
+    
     body {
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
       background: linear-gradient(135deg, #f5f0ff 0%, #ffe8f0 100%);
@@ -371,10 +309,10 @@ document.addEventListener('DOMContentLoaded', function() {
       top: 0;
       z-index: 100;
     }
-
+    
     .header h1 { font-size: 18px; font-weight: 700; }
     .header .subtitle { font-size: 11px; opacity: .82; margin-top: 2px; }
-
+    
     .history-btn {
       background: rgba(255,255,255,.22);
       border: none;
@@ -432,7 +370,7 @@ document.addEventListener('DOMContentLoaded', function() {
       align-items: center;
       margin-bottom: 8px;
     }
-
+    
     .input-row input {
       flex: 1;
       border: 2px solid #e5e7eb;
@@ -447,15 +385,15 @@ document.addEventListener('DOMContentLoaded', function() {
       -webkit-appearance: none;
       -moz-appearance: textfield;
     }
-
+    
     .input-row input::-webkit-outer-spin-button,
     .input-row input::-webkit-inner-spin-button {
       -webkit-appearance: none;
       margin: 0;
     }
-
+    
     .input-row input:focus { border-color: var(--accent); }
-
+    
     .add-btn {
       background: var(--accent);
       color: white;
@@ -480,7 +418,7 @@ document.addEventListener('DOMContentLoaded', function() {
       overflow: hidden;
       box-shadow: 0 2px 12px rgba(0,0,0,.07);
     }
-
+    
     .totals-title {
       background: linear-gradient(135deg, #6c3dc7, #a855a0);
       color: white;
@@ -489,14 +427,14 @@ document.addEventListener('DOMContentLoaded', function() {
       font-weight: 700;
       font-size: 15px;
     }
-
+    
     .totals-grid {
       display: flex;
       flex-direction: column;
       gap: 1px;
       background: #f0f0f0;
     }
-
+    
     .total-item {
       background: white;
       padding: 14px 10px;
@@ -548,7 +486,7 @@ document.addEventListener('DOMContentLoaded', function() {
       box-shadow: 0 3px 12px rgba(108,61,199,.35);
     }
     .hist-header h2 { font-size: 18px; font-weight: 700; }
-
+    
     .back-btn {
       background: rgba(255,255,255,.22);
       border: none;
@@ -572,7 +510,7 @@ document.addEventListener('DOMContentLoaded', function() {
       box-shadow: 0 2px 8px rgba(0,0,0,.06);
       overflow: hidden;
     }
-
+    
     .date-group-header {
       background: linear-gradient(90deg, #6c3dc7, #a855a0);
       color: white;
@@ -592,7 +530,7 @@ document.addEventListener('DOMContentLoaded', function() {
       padding: 10px 16px;
     }
     .field-section:last-child { border-bottom: none; }
-
+    
     .field-sec-header {
       font-size: 13px;
       font-weight: 700;
@@ -732,17 +670,17 @@ function todayStr() {
 }
 function nowTime() {
   const d = new Date();
-  return d.toLocaleTimeString('en-US', {
-    hour: '2-digit',
+  return d.toLocaleTimeString('en-US', { 
+    hour: '2-digit', 
     minute: '2-digit',
     timeZone: 'Asia/Kolkata'
   });
 }
 function formatDate(str) {
   const d = new Date(str + 'T00:00:00');
-  return d.toLocaleDateString('en-US', {
-    day: 'numeric',
-    month: 'long',
+  return d.toLocaleDateString('en-US', { 
+    day: 'numeric', 
+    month: 'long', 
     year: 'numeric',
     timeZone: 'Asia/Kolkata'
   });
@@ -811,26 +749,6 @@ function showJsError(msg) {
   }
 }
 
-// ====== NAMJAP LIFETIME GOAL (1 crore) ======
-const NAMJAP_GOAL = 10000000; // 1 કરોડ
-
-function namjapProgressHTML(total) {
-  const pct = Math.min(100, (total / NAMJAP_GOAL) * 100);
-  const remaining = Math.max(0, NAMJAP_GOAL - total);
-  const pctLabel = (pct >= 100 ? '100' : pct < 10 ? pct.toFixed(2) : pct.toFixed(1)) + '%';
-  return `
-      <div style="margin-top:10px;padding:0 8px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">
-          <span style="font-size:11px;font-weight:700;color:#1976d2;">🎯 ૧ કરોડ Goal</span>
-          <span style="font-size:13px;font-weight:800;color:#1976d2;">${pctLabel}</span>
-        </div>
-        <div style="height:10px;background:#e3ecf7;border-radius:6px;overflow:hidden;">
-          <div style="height:100%;width:${Math.max(pct, 0.4)}%;background:linear-gradient(90deg,#1976d2,#42a5f5,#7e57c2);border-radius:6px;transition:width .6s ease;"></div>
-        </div>
-        <div style="font-size:10px;color:#b6bfca;margin-top:4px;text-align:right;">બાકી: ${remaining.toLocaleString('en-US')}</div>
-      </div>`;
-}
-
 function buildTotals(data) {
   try {
     const tg = document.getElementById('totals-grid');
@@ -845,7 +763,6 @@ function buildTotals(data) {
         <div class="total-item">
           <div class="t-name">${f.name}</div>
           <div class="t-val" style="color:${f.color}" id="total-${f.id}">${total.toLocaleString('en-US')}</div>
-          ${f.id === 'namjap' ? namjapProgressHTML(total) : ''}
         </div>`;
     });
     tg.innerHTML = totalsHTML;
@@ -858,10 +775,10 @@ function buildTotals(data) {
 function addCount(fieldId) {
   const inp = document.getElementById(`inp-${fieldId}`);
   const val = parseInt(inp.value, 10);
-  if (!val || val <= 0) {
-    showToast('⚠️ Please enter a valid number');
+  if (!val || val <= 0) { 
+    showToast('⚠️ Please enter a valid number'); 
     inp.focus();
-    return;
+    return; 
   }
   // Remove from pending if available
   let pending = getPendingData();
