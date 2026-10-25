@@ -907,6 +907,7 @@ function toggleAutoLoop(fieldId) {
   loops[fieldId] = !loops[fieldId];
   try { localStorage.setItem('media-auto-loop', JSON.stringify(loops)); } catch (e) {}
   renderAutoLoop(fieldId);
+  mediaBlocks[fieldId].querySelector('audio, video').loop = loops[fieldId];
 }
 function toggleSpeedPanel(fieldId) {
   mediaBlocks[fieldId].querySelector('.speed-panel').classList.toggle('open');
@@ -941,25 +942,45 @@ function createMediaBlock(fieldId) {
       if (other !== el && !other.paused) other.pause();
     });
   });
-  // Track real playback so seeking to the end does not count
+  // Track real playback so seeking to the end does not count.
+  // Auto mode uses the native loop attribute so playback continues in the
+  // background without JS restarting it; a lap is detected when the loop
+  // seeks from the end back to the start.
   let played = 0;
   let lastTime = 0;
-  el.addEventListener('timeupdate', () => {
-    const d = el.currentTime - lastTime;
-    if (d > 0 && d < 2.5) played += d;
-    lastTime = el.currentTime;
-  });
-  el.addEventListener('seeking', () => { lastTime = el.currentTime; });
-  el.addEventListener('ended', () => {
+  let lastWall = 0;
+  const finishLap = () => {
     const enough = el.duration && played >= el.duration * MIN_PLAYED_RATIO;
     played = 0;
-    lastTime = 0;
     if (enough) addCount(fieldId, m.countOnEnd);
     else showToast('⚠️ Not counted: play the full track without skipping');
-    if (isAutoLoop(fieldId)) {
-      el.currentTime = 0;
-      el.play().catch(() => {});
+  };
+  el.loop = isAutoLoop(fieldId);
+  el.addEventListener('play', () => { lastWall = performance.now(); });
+  el.addEventListener('timeupdate', () => {
+    const now = performance.now();
+    const d = el.currentTime - lastTime;
+    const maxStep = ((now - lastWall) / 1000) * el.playbackRate * 1.5 + 1;
+    if (d > 0 && d <= maxStep) played += d;
+    lastTime = el.currentTime;
+    lastWall = now;
+  });
+  el.addEventListener('seeking', () => {
+    const nearEnd = el.duration && lastTime >= el.duration - (2 * el.playbackRate + 1);
+    if (el.loop && nearEnd && el.currentTime < 1) {
+      played += el.duration - lastTime;
+      lastTime = el.currentTime;
+      lastWall = performance.now();
+      finishLap();
+      return;
     }
+    lastTime = el.currentTime;
+    lastWall = performance.now();
+  });
+  el.addEventListener('ended', () => {
+    played += Math.max(0, (el.duration || 0) - lastTime);
+    lastTime = 0;
+    finishLap();
   });
   // Browsers reset playbackRate when a new source loads
   el.addEventListener('loadedmetadata', () => {
