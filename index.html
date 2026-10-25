@@ -1,3 +1,113 @@
+<meta charset="UTF-8">
+<script>
+// ====== CLOUD SYNC (Supabase) ======
+const SB_URL = '';
+const SB_KEY = 'sb_publishable_XVqFzj3tvYz9ns-YWQ7oPw_RNBmTQ6D';
+const SB_TABLE = 'tracker_kv';
+const SYNC_KEYS = ['spiritual-tracker', 'pending-tracker', 'period-skip', 'last-auto-add-date'];
+const DIRTY_KEY = 'sync-dirty';
+const SYNC_TIMEOUT_MS = 3000;
+const SYNC_ENABLED = /^https:\/\//.test(SB_URL);
+
+const _origSetItem = Storage.prototype.setItem;
+const _origGetItem = Storage.prototype.getItem;
+
+function sbHeaders(extra) {
+  const h = { 'apikey': SB_KEY, 'Content-Type': 'application/json' };
+  if (!SB_KEY.startsWith('sb_')) h['Authorization'] = 'Bearer ' + SB_KEY;
+  return Object.assign(h, extra || {});
+}
+function getDirty() {
+  try { return JSON.parse(_origGetItem.call(localStorage, DIRTY_KEY) || '[]'); } catch (e) { return []; }
+}
+function setDirty(list) {
+  _origSetItem.call(localStorage, DIRTY_KEY, JSON.stringify(Array.from(new Set(list))));
+}
+function pushKeys(keys) {
+  if (!SYNC_ENABLED || !keys.length) return Promise.resolve();
+  const rows = keys.map(k => ({
+    key: k,
+    value: _origGetItem.call(localStorage, k),
+    updated_at: new Date().toISOString()
+  }));
+  return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?on_conflict=key', {
+    method: 'POST',
+    headers: sbHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+    body: JSON.stringify(rows)
+  }).then(r => {
+    if (!r.ok) throw new Error('push ' + r.status);
+    setDirty(getDirty().filter(k => !keys.includes(k)));
+  }).catch(() => setDirty(getDirty().concat(keys)));
+}
+function pullAll() {
+  if (!SYNC_ENABLED) return Promise.resolve();
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), SYNC_TIMEOUT_MS);
+  return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?select=key,value', {
+    headers: sbHeaders(), signal: ctrl.signal
+  }).then(r => {
+    clearTimeout(t);
+    if (!r.ok) throw new Error('pull ' + r.status);
+    return r.json();
+  }).then(rows => {
+    const dirty = getDirty();
+    const remote = {};
+    rows.forEach(row => { remote[row.key] = row.value; });
+    const toPush = dirty.slice();
+    SYNC_KEYS.forEach(k => {
+      if (dirty.includes(k)) return;
+      if (k in remote) {
+        const local = _origGetItem.call(localStorage, k);
+        if (remote[k] !== null && remote[k] !== local) {
+          if (local !== null) _origSetItem.call(localStorage, 'backup-before-sync:' + k, local);
+          _origSetItem.call(localStorage, k, remote[k]);
+        }
+      } else if (_origGetItem.call(localStorage, k) !== null) {
+        toPush.push(k);
+      }
+    });
+    return pushKeys(toPush);
+  }).catch(() => { clearTimeout(t); });
+}
+
+// Mirror writes of tracked keys to the cloud
+Storage.prototype.setItem = function (k, v) {
+  _origSetItem.call(this, k, v);
+  if (this === localStorage && SYNC_KEYS.includes(k)) pushKeys([k]);
+};
+
+// Hold DOMContentLoaded handlers until the first pull finishes
+(function () {
+  const queued = [];
+  let domReady = false, synced = false, released = false;
+  const _origAdd = document.addEventListener;
+  document.addEventListener = function (type, fn, opts) {
+    if (type === 'DOMContentLoaded' && !released) { queued.push(fn); return; }
+    return _origAdd.call(this, type, fn, opts);
+  };
+  function release() {
+    if (released || !domReady || !synced) return;
+    released = true;
+    document.addEventListener = _origAdd;
+    queued.forEach(fn => { try { fn.call(document, new Event('DOMContentLoaded')); } catch (e) { console.error(e); } });
+  }
+  _origAdd.call(document, 'DOMContentLoaded', () => { domReady = true; release(); });
+  const done = () => { synced = true; release(); };
+  setTimeout(done, SYNC_TIMEOUT_MS + 500);
+  try { pullAll().then(done, done); } catch (e) { done(); }
+})();
+
+// Refresh from cloud when the app comes back to the foreground
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'visible') return;
+  pullAll().then(() => {
+    if (typeof buildMainPage === 'function') buildMainPage();
+    if (typeof renderPendingTable === 'function') renderPendingTable();
+    if (typeof renderPeriodStatus === 'function') renderPeriodStatus();
+  });
+});
+window.addEventListener('online', () => pushKeys(getDirty()));
+</script>
 <!-- Main Page -->
   <div id="main-page">
     <div class="header">
@@ -106,56 +216,8 @@ function addPendingEntry(date, fieldId, count) {
   savePendingData(data);
 }
 // ====== DAILY GOAL TRACKER ======
-function getDailyGoalData() {
-  try {
-    const today = todayStr();
-    const baseGoals = {
-      'archavatar-stotra': 1,
-      'vandu-path': 0,
-      'janmangal-path': 11,
-      'namjap': 25000
-    };
-    // Always recalculate from today's history (not cached)
-    const data = loadData();
-    const todayData = data[today] || {};
-    // Subtract completed amounts from base goals
-    const remainingGoals = {};
-    FIELDS.forEach(f => {
-      const completed = todayData[f.id]
-        ? todayData[f.id].reduce((sum, entry) => sum + (entry.count || 0), 0)
-        : 0;
-      remainingGoals[f.id] = Math.max(0, baseGoals[f.id] - completed);
-    });
-    return remainingGoals;
-  } catch (e) {
-    return {};
-  }
-}
-// Daily goals are now calculated from history, no need to save separately
 function renderPendingTable() {
   let html = '';
-  // === DAILY GOAL SECTION (TOP - MORE PROMINENT) ===
-  const dailyGoals = getDailyGoalData();
-  html += '<div style="background:linear-gradient(135deg, #6c3dc7, #a855a0);border-radius:12px;padding:16px;margin-bottom:20px;color:white;">';
-  html += '<div style="font-weight:700;font-size:18px;margin-bottom:12px;">🎯 Today\'s Goal</div>';
-  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">';
-  let dailyTotalMinutes = 0;
-  FIELDS.forEach(f => {
-    const remaining = dailyGoals[f.id] || 0;
-    const isCompleted = remaining === 0;
-    const timeRequired = f.id === 'namjap' ? calculateTimeRequired(f.id, remaining, 'fast') : calculateTimeRequired(f.id, remaining);
-    dailyTotalMinutes += timeRequired;
-    html += `<div style="background:rgba(255,255,255,${isCompleted ? 0.1 : 0.15});border-radius:8px;padding:12px;text-align:center;border:2px solid ${isCompleted ? 'rgba(255,255,255,0.3)' : f.color};">
-      <div style="font-size:12px;opacity:0.9;margin-bottom:4px;">${f.name}</div>
-      <div style="font-size:28px;font-weight:800;">${remaining}</div>
-      ${isCompleted ? '<div style="font-size:12px;color:#90EE90;">✅ Done!</div>' : ''}
-    </div>`;
-  });
-  html += '</div>';
-  // Daily goal total time
-  const dailyTimeFormatted = formatTime(dailyTotalMinutes);
-  html += `<div style="text-align:center;font-size:14px;opacity:0.95;"><strong>⏱️ Today\'s Time: ${dailyTimeFormatted}</strong></div>`;
-  html += '</div>';
   // === MAIN PENDING SECTION (BELOW) ===
   const data = getPendingData();
   if (data.length > 0) {
@@ -260,39 +322,9 @@ function renderPeriodStatus() {
   }
 }
 // Auto-add daily pending counts
-function autoAddDailyPending() {
-  const today = todayStr();
-  const data = getPendingData();
-  // Period skip: don't auto-add on days within the skip window.
-  const { skipFrom, skipTo } = getPeriodSkip();
-  if (skipFrom && skipTo && today >= skipFrom && today <= skipTo) {
-    return;
-  }
-  // Check if auto-pending for today already exists.
-  // NOTE: pending entries alone are NOT a reliable marker — addCount() deletes
-  // them once completed, which caused a same-day double auto-add. So we also
-  // keep a persistent per-day marker in localStorage ('last-auto-add-date').
-  const autoAddedToday = data.some(entry => entry.date === today && entry.autoAdded === true);
-  const lastAutoAddDate = localStorage.getItem('last-auto-add-date');
-  if (!autoAddedToday && lastAutoAddDate !== today) {
-    // Auto-add daily goal counts (vandu goal is 0, so it is not auto-added)
-    const autoCounts = [
-      { fieldId: 'archavatar-stotra', count: 1 },
-      { fieldId: 'janmangal-path', count: 11 },
-      { fieldId: 'namjap', count: 25000 }
-    ];
-    autoCounts.forEach(item => {
-      data.push({ date: today, fieldId: item.fieldId, count: item.count, autoAdded: true });
-    });
-    savePendingData(data);
-    localStorage.setItem('last-auto-add-date', today);
-    showToast('✅ Daily pending counts auto-added');
-  }
-}
 // Setup pending tracker on page load
 document.addEventListener('DOMContentLoaded', function() {
   setupPendingForm();
-  autoAddDailyPending();
   renderPendingTable();
   renderPeriodStatus();
 });
@@ -584,6 +616,121 @@ document.addEventListener('DOMContentLoaded', function() {
       padding: 40px 20px;
       font-size: 14px;
     }
+    /* Audio / Video */
+    .media-block { margin-top: 4px; }
+    .media-block video, .media-block audio {
+      width: 100%;
+      display: block;
+      border-radius: 10px;
+      background: #000;
+    }
+    .media-block audio { background: transparent; }
+    .speed-toggle {
+      margin-top: 8px;
+      width: 100%;
+      background: #f5f0ff;
+      color: var(--accent);
+      border: 1px solid #e5defa;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 40px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .speed-panel { display: none; margin-top: 8px; }
+    .speed-panel.open { display: block; }
+    .speed-steps { display: flex; gap: 6px; margin-bottom: 8px; }
+    .speed-steps button {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 8px 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #555;
+      cursor: pointer;
+      min-width: 44px;
+      min-height: 40px;
+    }
+    .speed-steps .speed-input {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      text-align: center;
+      font-size: 16px;
+      font-weight: 700;
+      color: #555;
+      -moz-appearance: textfield;
+    }
+    .speed-steps .speed-input::-webkit-outer-spin-button,
+    .speed-steps .speed-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .speed-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: #ddd;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .speed-grid button {
+      background: #ececec;
+      border: none;
+      padding: 10px 0;
+      font-size: 13px;
+      font-weight: 700;
+      color: #555;
+      cursor: pointer;
+    }
+    .speed-grid button.active { background: var(--accent); color: white; }
+    /* History filter, pager, totals */
+    .hist-filter { display: flex; gap: 8px; margin-bottom: 14px; }
+    .hist-filter input {
+      flex: 1;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 16px;
+      color: #2d1b4e;
+      background: white;
+      min-height: 44px;
+    }
+    .hist-btn {
+      background: #6c3dc7;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      min-height: 44px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .hist-btn:disabled { background: #cfc6e8; cursor: default; }
+    .hist-pager {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 4px 0 16px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #6c3dc7;
+    }
+    .hist-totals { margin: 0 0 24px; }
+    .hist-total-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #f0eeff;
+      font-size: 14px;
+    }
+    .hist-total-row:last-child { border-bottom: none; }
+    .hist-total-row .ht-val { font-size: 20px; font-weight: 800; }
     /* Toast */
     #toast {
       position: fixed;
@@ -691,6 +838,110 @@ function calcDayFieldTotal(entries) {
   if (!entries) return 0;
   return entries.reduce((s, e) => s + (e.count || 0), 0);
 }
+// ====== AUDIO / VIDEO ======
+const MEDIA = {
+  'archavatar-stotra': { src: 'media/archavatar-stotra.mp4', type: 'video', countOnEnd: 1 },
+  'vandu-path': { src: 'media/vandu-path.mp4', type: 'video', countOnEnd: 1 },
+  'janmangal-path': { src: 'media/janmangal-path.mp3', type: 'audio', countOnEnd: 1 },
+  'namjap': { src: 'media/namjap.m4a', type: 'audio', countOnEnd: 50 }
+};
+// Share of the track that must actually play (not skipped by seeking) to count
+const MIN_PLAYED_RATIO = 0.9;
+const SPEED_PRESETS = [25, 50, 75, 90, 100, 110, 125, 150, 175, 200, 250, 400];
+const SPEED_MIN = 25;
+const SPEED_MAX = 400;
+const mediaBlocks = {};
+function getSpeeds() {
+  try { return JSON.parse(localStorage.getItem('media-speed') || '{}'); } catch (e) { return {}; }
+}
+function setSpeed(fieldId, pct) {
+  pct = Math.round(Number(pct));
+  if (!isFinite(pct)) pct = 100;
+  pct = Math.min(SPEED_MAX, Math.max(SPEED_MIN, pct));
+  const block = mediaBlocks[fieldId];
+  if (!block) return;
+  const el = block.querySelector('audio, video');
+  el.playbackRate = pct / 100;
+  el.defaultPlaybackRate = pct / 100;
+  block.querySelector('.speed-input').value = pct;
+  block.querySelector('.speed-toggle').textContent = `⚡ Speed ${pct}%`;
+  block.querySelectorAll('.speed-grid button').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.pct) === pct);
+  });
+  const speeds = getSpeeds();
+  speeds[fieldId] = pct;
+  try { localStorage.setItem('media-speed', JSON.stringify(speeds)); } catch (e) {}
+}
+function stepSpeed(fieldId, delta) {
+  const cur = Number(mediaBlocks[fieldId].querySelector('.speed-input').value) || 100;
+  setSpeed(fieldId, cur + delta);
+}
+function toggleSpeedPanel(fieldId) {
+  mediaBlocks[fieldId].querySelector('.speed-panel').classList.toggle('open');
+}
+function createMediaBlock(fieldId) {
+  const m = MEDIA[fieldId];
+  const block = document.createElement('div');
+  block.className = 'media-block';
+  const tag = m.type === 'video' ? 'video' : 'audio';
+  block.innerHTML = `
+    <${tag} controls preload="none" playsinline src="${m.src}"></${tag}>
+    <button class="speed-toggle" onclick="toggleSpeedPanel('${fieldId}')">⚡ Speed 100%</button>
+    <div class="speed-panel">
+      <div class="speed-steps">
+        <button onclick="stepSpeed('${fieldId}', -5)">-5%</button>
+        <button onclick="stepSpeed('${fieldId}', -1)">-1%</button>
+        <input class="speed-input" type="number" inputmode="numeric" min="${SPEED_MIN}" max="${SPEED_MAX}" value="100" onchange="setSpeed('${fieldId}', this.value)" />
+        <button onclick="stepSpeed('${fieldId}', 1)">+1%</button>
+        <button onclick="stepSpeed('${fieldId}', 5)">+5%</button>
+      </div>
+      <div class="speed-grid">
+        ${SPEED_PRESETS.map(p => `<button data-pct="${p}" onclick="setSpeed('${fieldId}', ${p})">${p}%</button>`).join('')}
+      </div>
+    </div>`;
+  const el = block.querySelector(tag);
+  el.addEventListener('play', () => {
+    Object.keys(mediaBlocks).forEach(id => {
+      const other = mediaBlocks[id].querySelector('audio, video');
+      if (other !== el && !other.paused) other.pause();
+    });
+  });
+  // Track real playback so seeking to the end does not count
+  let played = 0;
+  let lastTime = 0;
+  el.addEventListener('timeupdate', () => {
+    const d = el.currentTime - lastTime;
+    if (d > 0 && d < 2.5) played += d;
+    lastTime = el.currentTime;
+  });
+  el.addEventListener('seeking', () => { lastTime = el.currentTime; });
+  el.addEventListener('ended', () => {
+    const enough = el.duration && played >= el.duration * MIN_PLAYED_RATIO;
+    played = 0;
+    lastTime = 0;
+    if (enough) addCount(fieldId, m.countOnEnd);
+    else showToast('⚠️ Not counted: play the full track without skipping');
+  });
+  // Browsers reset playbackRate when a new source loads
+  el.addEventListener('loadedmetadata', () => {
+    el.playbackRate = (Number(block.querySelector('.speed-input').value) || 100) / 100;
+  });
+  return block;
+}
+function attachMediaPlayers() {
+  const speeds = getSpeeds();
+  Object.keys(MEDIA).forEach(fieldId => {
+    const slot = document.getElementById(`media-slot-${fieldId}`);
+    if (!slot) return;
+    if (!mediaBlocks[fieldId]) {
+      mediaBlocks[fieldId] = createMediaBlock(fieldId);
+      slot.appendChild(mediaBlocks[fieldId]);
+      setSpeed(fieldId, speeds[fieldId] || 100);
+    } else {
+      slot.appendChild(mediaBlocks[fieldId]);
+    }
+  });
+}
 // ====== MAIN PAGE RENDER ======
 function buildMainPage() {
   try {
@@ -711,10 +962,12 @@ function buildMainPage() {
               <input id="inp-${f.id}" type="number" min="1" placeholder="Count" inputmode="numeric" autocomplete="off" />
               <button class="add-btn" onclick="addCount('${f.id}')">Add</button>
             </div>
+            <div class="media-slot" id="media-slot-${f.id}"></div>
           </div>
         </div>`;
     });
     fc.innerHTML = html;
+    attachMediaPlayers();
     buildTotals(data);
   } catch (e) {
     showJsError('Main page render failed: ' + e);
@@ -768,9 +1021,9 @@ function buildTotals(data) {
     console.error('Error building totals:', error);
   }
 }
-function addCount(fieldId) {
+function addCount(fieldId, autoVal) {
   const inp = document.getElementById(`inp-${fieldId}`);
-  const val = parseInt(inp.value, 10);
+  const val = autoVal || parseInt(inp.value, 10);
   if (!val || val <= 0) {
     showToast('⚠️ Please enter a valid number');
     inp.focus();
@@ -806,13 +1059,17 @@ function addCount(fieldId) {
   if (!data[today][fieldId]) data[today][fieldId] = [];
   data[today][fieldId].push({ time: nowTime(), count: val });
   saveData(data);
-  inp.value = '';
-  inp.focus();
+  if (!autoVal) {
+    inp.value = '';
+    inp.focus();
+  }
   // Haptic feedback
   if ('vibrate' in navigator) {
     navigator.vibrate(50);
   }
-  showToast(`✅ ${val.toLocaleString('en-US')} added`);
+  showToast(autoVal
+    ? `✅ ${val.toLocaleString('en-US')} added (playback complete)`
+    : `✅ ${val.toLocaleString('en-US')} added`);
   // Always update pending table (for Daily Goal live update)
   renderPendingTable && renderPendingTable();
   buildMainPage();
@@ -820,10 +1077,73 @@ function addCount(fieldId) {
 // ====== HISTORY ======
 function openHistory() {
   document.getElementById('history-overlay').classList.add('open');
+  histPage = 0;
+  histDate = '';
   renderHistory();
 }
 function closeHistory() {
   document.getElementById('history-overlay').classList.remove('open');
+}
+const HIST_PAGE_SIZE = 5;
+let histPage = 0;
+let histDate = '';
+function histGoPage(n) {
+  histPage = n;
+  renderHistory();
+  document.getElementById('history-overlay').scrollTop = 0;
+}
+function histSetDate(v) {
+  histDate = v || '';
+  histPage = 0;
+  renderHistory();
+}
+function renderDateGroup(dt, dayData) {
+  const dayTotal = FIELDS.reduce((s, f) => s + calcDayFieldTotal(dayData[f.id]), 0);
+  const fieldSections = FIELDS.map(f => {
+    const entries = dayData[f.id] || [];
+    if (!entries.length) return '';
+    const entryRows = entries.map(e => `
+      <div class="entry-item">
+        <span class="e-time">🕐 ${e.time}</span>
+        <span class="e-num" style="color:${f.color}">${e.count.toLocaleString('en-US')}</span>
+      </div>`).join('');
+    const dayFieldTotal = calcDayFieldTotal(entries);
+    return `
+      <div class="field-section">
+        <div class="field-sec-header">
+          <span style="color:${f.color};font-size:13px;">${f.name}</span>
+          <span style="font-size:11px;color:#aaa">${entries.length} times</span>
+        </div>
+        ${entryRows}
+        ${entries.length > 1 ? `
+          <div class="day-field-total">
+            <span class="dt-label">= Total for this field</span>
+            <span class="dt-val" style="color:${f.color}">${dayFieldTotal.toLocaleString('en-US')}</span>
+          </div>` : ''}
+      </div>`;
+  }).join('');
+  return `
+    <div class="date-group">
+      <div class="date-group-header">
+        <span>📅 ${formatDate(dt)}</span>
+        <span style="font-size:12px;opacity:.85">Total: ${dayTotal.toLocaleString('en-US')}</span>
+      </div>
+      <div>
+        ${fieldSections || '<div style="color:#aaa;padding:12px 16px;font-size:13px">No entries</div>'}
+      </div>
+    </div>`;
+}
+function renderHistTotals(data) {
+  const rows = FIELDS.map(f => `
+    <div class="hist-total-row">
+      <span style="color:${f.color};font-weight:700">${f.name}</span>
+      <span class="ht-val" style="color:${f.color}">${calcTotal(data, f.id).toLocaleString('en-US')}</span>
+    </div>`).join('');
+  return `
+    <div class="totals-section hist-totals">
+      <div class="totals-title">📊 All Time Total</div>
+      ${rows}
+    </div>`;
 }
 function renderHistory() {
   const data = loadData();
@@ -833,43 +1153,32 @@ function renderHistory() {
     hc.innerHTML = '<div class="empty-msg">📭 No entries yet</div>';
     return;
   }
-  hc.innerHTML = sortedDates.map((dt, di) => {
-    const dayData = data[dt];
-    const dayTotal = FIELDS.reduce((s, f) => s + calcDayFieldTotal(dayData[f.id]), 0);
-    const fieldSections = FIELDS.map(f => {
-      const entries = dayData[f.id] || [];
-      if (!entries.length) return '';
-      const entryRows = entries.map(e => `
-        <div class="entry-item">
-          <span class="e-time">🕐 ${e.time}</span>
-          <span class="e-num" style="color:${f.color}">${e.count.toLocaleString('en-US')}</span>
-        </div>`).join('');
-      const dayFieldTotal = calcDayFieldTotal(entries);
-      return `
-        <div class="field-section">
-          <div class="field-sec-header">
-            <span style="color:${f.color};font-size:13px;">${f.name}</span>
-            <span style="font-size:11px;color:#aaa">${entries.length} times</span>
-          </div>
-          ${entryRows}
-          ${entries.length > 1 ? `
-            <div class="day-field-total">
-              <span class="dt-label">= Total for this field</span>
-              <span class="dt-val" style="color:${f.color}">${dayFieldTotal.toLocaleString('en-US')}</span>
-            </div>` : ''}
+  const filterBar = `
+    <div class="hist-filter">
+      <input type="date" value="${histDate}" max="${todayStr()}" onchange="histSetDate(this.value)" />
+      ${histDate ? '<button class="hist-btn" onclick="histSetDate(\'\')">✕ Clear</button>' : ''}
+    </div>`;
+  let body = '';
+  let pager = '';
+  if (histDate) {
+    body = data[histDate]
+      ? renderDateGroup(histDate, data[histDate])
+      : `<div class="empty-msg">📭 No entries on ${formatDate(histDate)}</div>`;
+  } else {
+    const totalPages = Math.ceil(sortedDates.length / HIST_PAGE_SIZE);
+    if (histPage >= totalPages) histPage = totalPages - 1;
+    const pageDates = sortedDates.slice(histPage * HIST_PAGE_SIZE, (histPage + 1) * HIST_PAGE_SIZE);
+    body = pageDates.map(dt => renderDateGroup(dt, data[dt])).join('');
+    if (totalPages > 1) {
+      pager = `
+        <div class="hist-pager">
+          <button class="hist-btn" ${histPage === 0 ? 'disabled' : ''} onclick="histGoPage(${histPage - 1})">← Previous</button>
+          <span>Page ${histPage + 1} / ${totalPages}</span>
+          <button class="hist-btn" ${histPage >= totalPages - 1 ? 'disabled' : ''} onclick="histGoPage(${histPage + 1})">Next →</button>
         </div>`;
-    }).join('');
-    return `
-      <div class="date-group">
-        <div class="date-group-header">
-          <span>📅 ${formatDate(dt)}</span>
-          <span style="font-size:12px;opacity:.85">Total: ${dayTotal.toLocaleString('en-US')}</span>
-        </div>
-        <div>
-          ${fieldSections || '<div style="color:#aaa;padding:12px 16px;font-size:13px">No entries</div>'}
-        </div>
-      </div>`;
-  }).join('');
+    }
+  }
+  hc.innerHTML = filterBar + body + pager + renderHistTotals(data);
 }
 // ====== UTILITIES ======
 let toastTimer;
