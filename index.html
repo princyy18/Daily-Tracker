@@ -625,9 +625,23 @@ document.addEventListener('DOMContentLoaded', function() {
       background: #000;
     }
     .media-block audio { background: transparent; }
+    .media-actions { display: flex; gap: 8px; margin-top: 8px; }
+    .loop-toggle {
+      flex: 0 0 auto;
+      background: #f5f0ff;
+      color: #888;
+      border: 1px solid #e5defa;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 40px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .loop-toggle.on { background: var(--accent); color: white; border-color: var(--accent); }
     .speed-toggle {
-      margin-top: 8px;
-      width: 100%;
+      flex: 1;
       background: #f5f0ff;
       color: var(--accent);
       border: 1px solid #e5defa;
@@ -876,6 +890,24 @@ function stepSpeed(fieldId, delta) {
   const cur = Number(mediaBlocks[fieldId].querySelector('.speed-input').value) || 100;
   setSpeed(fieldId, cur + delta);
 }
+function getAutoLoops() {
+  try { return JSON.parse(localStorage.getItem('media-auto-loop') || '{}'); } catch (e) { return {}; }
+}
+function isAutoLoop(fieldId) {
+  return !!getAutoLoops()[fieldId];
+}
+function renderAutoLoop(fieldId) {
+  const on = isAutoLoop(fieldId);
+  const btn = mediaBlocks[fieldId].querySelector('.loop-toggle');
+  btn.textContent = on ? '🔁 Auto: On' : '🔁 Auto: Off';
+  btn.classList.toggle('on', on);
+}
+function toggleAutoLoop(fieldId) {
+  const loops = getAutoLoops();
+  loops[fieldId] = !loops[fieldId];
+  try { localStorage.setItem('media-auto-loop', JSON.stringify(loops)); } catch (e) {}
+  renderAutoLoop(fieldId);
+}
 function toggleSpeedPanel(fieldId) {
   mediaBlocks[fieldId].querySelector('.speed-panel').classList.toggle('open');
 }
@@ -886,7 +918,10 @@ function createMediaBlock(fieldId) {
   const tag = m.type === 'video' ? 'video' : 'audio';
   block.innerHTML = `
     <${tag} controls preload="none" playsinline src="${m.src}"></${tag}>
-    <button class="speed-toggle" onclick="toggleSpeedPanel('${fieldId}')">⚡ Speed 100%</button>
+    <div class="media-actions">
+      <button class="loop-toggle" onclick="toggleAutoLoop('${fieldId}')">🔁 Auto: Off</button>
+      <button class="speed-toggle" onclick="toggleSpeedPanel('${fieldId}')">⚡ Speed 100%</button>
+    </div>
     <div class="speed-panel">
       <div class="speed-steps">
         <button onclick="stepSpeed('${fieldId}', -5)">-5%</button>
@@ -921,6 +956,10 @@ function createMediaBlock(fieldId) {
     lastTime = 0;
     if (enough) addCount(fieldId, m.countOnEnd);
     else showToast('⚠️ Not counted: play the full track without skipping');
+    if (isAutoLoop(fieldId)) {
+      el.currentTime = 0;
+      el.play().catch(() => {});
+    }
   });
   // Browsers reset playbackRate when a new source loads
   el.addEventListener('loadedmetadata', () => {
@@ -937,6 +976,7 @@ function attachMediaPlayers() {
       mediaBlocks[fieldId] = createMediaBlock(fieldId);
       slot.appendChild(mediaBlocks[fieldId]);
       setSpeed(fieldId, speeds[fieldId] || 100);
+      renderAutoLoop(fieldId);
     } else {
       slot.appendChild(mediaBlocks[fieldId]);
     }
