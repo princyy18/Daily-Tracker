@@ -625,6 +625,28 @@ document.addEventListener('DOMContentLoaded', function() {
       background: #000;
     }
     .media-block audio { background: transparent; }
+    .media-block .hidden { display: none; }
+    .mode-switch {
+      display: flex;
+      background: #f0ecfa;
+      border-radius: 10px;
+      padding: 3px;
+      margin-bottom: 8px;
+    }
+    .mode-switch button {
+      flex: 1;
+      background: transparent;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 0;
+      font-size: 13px;
+      font-weight: 700;
+      color: #888;
+      cursor: pointer;
+      min-height: 36px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .mode-switch button.active { background: var(--accent); color: white; }
     .media-actions { display: flex; gap: 8px; margin-top: 8px; }
     .loop-toggle {
       flex: 0 0 auto;
@@ -854,8 +876,8 @@ function calcDayFieldTotal(entries) {
 }
 // ====== AUDIO / VIDEO ======
 const MEDIA = {
-  'archavatar-stotra': { src: 'media/archavatar-stotra.mp4', type: 'video', countOnEnd: 1 },
-  'vandu-path': { src: 'media/vandu-path.mp4', type: 'video', countOnEnd: 1 },
+  'archavatar-stotra': { src: 'media/archavatar-stotra.mp4', type: 'video', audioSrc: 'media/archavatar-stotra-audio.m4a', countOnEnd: 1 },
+  'vandu-path': { src: 'media/vandu-path.mp4', type: 'video', audioSrc: 'media/vandu-path-audio.m4a', countOnEnd: 1 },
   'janmangal-path': { src: 'media/janmangal-path.mp3', type: 'audio', countOnEnd: 1 },
   'namjap': { src: 'media/namjap.m4a', type: 'audio', countOnEnd: 50 }
 };
@@ -874,9 +896,10 @@ function setSpeed(fieldId, pct) {
   pct = Math.min(SPEED_MAX, Math.max(SPEED_MIN, pct));
   const block = mediaBlocks[fieldId];
   if (!block) return;
-  const el = block.querySelector('audio, video');
-  el.playbackRate = pct / 100;
-  el.defaultPlaybackRate = pct / 100;
+  block.querySelectorAll('audio, video').forEach(el => {
+    el.playbackRate = pct / 100;
+    el.defaultPlaybackRate = pct / 100;
+  });
   block.querySelector('.speed-input').value = pct;
   block.querySelector('.speed-toggle').textContent = `⚡ Speed ${pct}%`;
   block.querySelectorAll('.speed-grid button').forEach(b => {
@@ -907,38 +930,33 @@ function toggleAutoLoop(fieldId) {
   loops[fieldId] = !loops[fieldId];
   try { localStorage.setItem('media-auto-loop', JSON.stringify(loops)); } catch (e) {}
   renderAutoLoop(fieldId);
-  mediaBlocks[fieldId].querySelector('audio, video').loop = loops[fieldId];
+  mediaBlocks[fieldId].querySelectorAll('audio, video').forEach(el => { el.loop = !!loops[fieldId]; });
 }
 function toggleSpeedPanel(fieldId) {
   mediaBlocks[fieldId].querySelector('.speed-panel').classList.toggle('open');
 }
-function createMediaBlock(fieldId) {
+function getMediaModes() {
+  try { return JSON.parse(localStorage.getItem('media-mode') || '{}'); } catch (e) { return {}; }
+}
+function setMediaMode(fieldId, mode) {
+  const block = mediaBlocks[fieldId];
+  if (!block) return;
+  block.querySelectorAll('audio, video').forEach(el => {
+    const show = el.dataset.mode === mode;
+    if (!show && !el.paused) el.pause();
+    el.classList.toggle('hidden', !show);
+  });
+  block.querySelectorAll('.mode-switch button').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  const modes = getMediaModes();
+  modes[fieldId] = mode;
+  try { localStorage.setItem('media-mode', JSON.stringify(modes)); } catch (e) {}
+}
+function wireMediaElement(fieldId, block, el) {
   const m = MEDIA[fieldId];
-  const block = document.createElement('div');
-  block.className = 'media-block';
-  const tag = m.type === 'video' ? 'video' : 'audio';
-  block.innerHTML = `
-    <${tag} controls preload="none" playsinline src="${m.src}"></${tag}>
-    <div class="media-actions">
-      <button class="loop-toggle" onclick="toggleAutoLoop('${fieldId}')">🔁 Auto: Off</button>
-      <button class="speed-toggle" onclick="toggleSpeedPanel('${fieldId}')">⚡ Speed 100%</button>
-    </div>
-    <div class="speed-panel">
-      <div class="speed-steps">
-        <button onclick="stepSpeed('${fieldId}', -5)">-5%</button>
-        <button onclick="stepSpeed('${fieldId}', -1)">-1%</button>
-        <input class="speed-input" type="number" inputmode="numeric" min="${SPEED_MIN}" max="${SPEED_MAX}" value="100" onchange="setSpeed('${fieldId}', this.value)" />
-        <button onclick="stepSpeed('${fieldId}', 1)">+1%</button>
-        <button onclick="stepSpeed('${fieldId}', 5)">+5%</button>
-      </div>
-      <div class="speed-grid">
-        ${SPEED_PRESETS.map(p => `<button data-pct="${p}" onclick="setSpeed('${fieldId}', ${p})">${p}%</button>`).join('')}
-      </div>
-    </div>`;
-  const el = block.querySelector(tag);
   el.addEventListener('play', () => {
-    Object.keys(mediaBlocks).forEach(id => {
-      const other = mediaBlocks[id].querySelector('audio, video');
+    document.querySelectorAll('.media-block audio, .media-block video').forEach(other => {
       if (other !== el && !other.paused) other.pause();
     });
   });
@@ -986,6 +1004,40 @@ function createMediaBlock(fieldId) {
   el.addEventListener('loadedmetadata', () => {
     el.playbackRate = (Number(block.querySelector('.speed-input').value) || 100) / 100;
   });
+}
+function createMediaBlock(fieldId) {
+  const m = MEDIA[fieldId];
+  const block = document.createElement('div');
+  block.className = 'media-block';
+  const players = m.type === 'video'
+    ? `<video controls preload="none" playsinline data-mode="video" src="${m.src}"></video>` +
+      (m.audioSrc ? `<audio controls preload="none" data-mode="audio" class="hidden" src="${m.audioSrc}"></audio>` : '')
+    : `<audio controls preload="none" data-mode="audio" src="${m.src}"></audio>`;
+  const modeSwitch = m.audioSrc ? `
+    <div class="mode-switch">
+      <button data-mode="video" class="active" onclick="setMediaMode('${fieldId}', 'video')">🎬 Video</button>
+      <button data-mode="audio" onclick="setMediaMode('${fieldId}', 'audio')">🎧 Audio</button>
+    </div>` : '';
+  block.innerHTML = `
+    ${modeSwitch}
+    ${players}
+    <div class="media-actions">
+      <button class="loop-toggle" onclick="toggleAutoLoop('${fieldId}')">🔁 Auto: Off</button>
+      <button class="speed-toggle" onclick="toggleSpeedPanel('${fieldId}')">⚡ Speed 100%</button>
+    </div>
+    <div class="speed-panel">
+      <div class="speed-steps">
+        <button onclick="stepSpeed('${fieldId}', -5)">-5%</button>
+        <button onclick="stepSpeed('${fieldId}', -1)">-1%</button>
+        <input class="speed-input" type="number" inputmode="numeric" min="${SPEED_MIN}" max="${SPEED_MAX}" value="100" onchange="setSpeed('${fieldId}', this.value)" />
+        <button onclick="stepSpeed('${fieldId}', 1)">+1%</button>
+        <button onclick="stepSpeed('${fieldId}', 5)">+5%</button>
+      </div>
+      <div class="speed-grid">
+        ${SPEED_PRESETS.map(p => `<button data-pct="${p}" onclick="setSpeed('${fieldId}', ${p})">${p}%</button>`).join('')}
+      </div>
+    </div>`;
+  block.querySelectorAll('audio, video').forEach(el => wireMediaElement(fieldId, block, el));
   return block;
 }
 function attachMediaPlayers() {
@@ -998,6 +1050,7 @@ function attachMediaPlayers() {
       slot.appendChild(mediaBlocks[fieldId]);
       setSpeed(fieldId, speeds[fieldId] || 100);
       renderAutoLoop(fieldId);
+      if (MEDIA[fieldId].audioSrc) setMediaMode(fieldId, getMediaModes()[fieldId] || 'video');
     } else {
       slot.appendChild(mediaBlocks[fieldId]);
     }
