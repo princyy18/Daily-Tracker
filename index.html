@@ -23,8 +23,42 @@ function getDirty() {
 function setDirty(list) {
   _origSetItem.call(localStorage, DIRTY_KEY, JSON.stringify(Array.from(new Set(list))));
 }
+const MERGE_KEY = 'spiritual-tracker';
+function parseJSON(v, fallback) {
+  try { return v ? JSON.parse(v) : fallback; } catch (e) { return fallback; }
+}
+function timeToMinutes(t) {
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec((t || '').trim());
+  if (!m) return 0;
+  let h = Number(m[1]) % 12;
+  if (m[3].toUpperCase() === 'PM') h += 12;
+  return h * 60 + Number(m[2]);
+}
+// Entries are append-only, so two copies are merged as a multiset union:
+// an entry (time + count) present N times on either side is kept N times.
+function mergeTracker(a, b) {
+  const out = JSON.parse(JSON.stringify(a || {}));
+  Object.keys(b || {}).forEach(date => {
+    if (!out[date]) out[date] = {};
+    Object.keys(b[date] || {}).forEach(field => {
+      const list = out[date][field] || [];
+      const avail = {};
+      list.forEach(e => { const sig = e.time + '|' + e.count; avail[sig] = (avail[sig] || 0) + 1; });
+      (b[date][field] || []).forEach(e => {
+        const sig = e.time + '|' + e.count;
+        if (avail[sig] > 0) avail[sig]--;
+        else list.push(e);
+      });
+      list.sort((x, y) => timeToMinutes(x.time) - timeToMinutes(y.time));
+      out[date][field] = list;
+    });
+  });
+  return out;
+}
 function pushKeys(keys) {
   if (!SYNC_ENABLED || !keys.length) return Promise.resolve();
+  // Mark as pending before sending so a pull never overwrites unsent changes
+  setDirty(getDirty().concat(keys));
   const rows = keys.map(k => ({
     key: k,
     value: _origGetItem.call(localStorage, k),
@@ -33,18 +67,20 @@ function pushKeys(keys) {
   return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?on_conflict=key', {
     method: 'POST',
     headers: sbHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
-    body: JSON.stringify(rows)
+    body: JSON.stringify(rows),
+    keepalive: true
   }).then(r => {
     if (!r.ok) throw new Error('push ' + r.status);
-    setDirty(getDirty().filter(k => !keys.includes(k)));
-  }).catch(() => setDirty(getDirty().concat(keys)));
+    const sent = rows.filter(row => _origGetItem.call(localStorage, row.key) === row.value).map(row => row.key);
+    setDirty(getDirty().filter(k => !sent.includes(k)));
+  }).catch(() => {});
 }
 function pullAll() {
   if (!SYNC_ENABLED) return Promise.resolve();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), SYNC_TIMEOUT_MS);
   return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?select=key,value', {
-    headers: sbHeaders(), signal: ctrl.signal
+    headers: sbHeaders(), signal: ctrl.signal, cache: 'no-store'
   }).then(r => {
     clearTimeout(t);
     if (!r.ok) throw new Error('pull ' + r.status);
@@ -53,16 +89,27 @@ function pullAll() {
     const dirty = getDirty();
     const remote = {};
     rows.forEach(row => { remote[row.key] = row.value; });
-    const toPush = dirty.slice();
+    const toPush = dirty.filter(k => k !== MERGE_KEY);
+    // Counts: always merge local, remote and any earlier backup
+    const backup = parseJSON(_origGetItem.call(localStorage, 'backup-before-sync:' + MERGE_KEY), {});
+    const local = parseJSON(_origGetItem.call(localStorage, MERGE_KEY), {});
+    const merged = mergeTracker(mergeTracker(parseJSON(remote[MERGE_KEY], {}), local), backup);
+    const mergedStr = JSON.stringify(merged);
+    if (Object.keys(merged).length) {
+      if (mergedStr !== _origGetItem.call(localStorage, MERGE_KEY)) _origSetItem.call(localStorage, MERGE_KEY, mergedStr);
+      if (mergedStr !== remote[MERGE_KEY]) toPush.push(MERGE_KEY);
+      else setDirty(getDirty().filter(k => k !== MERGE_KEY));
+    }
+    // Other keys: unsent local changes win, otherwise take the cloud copy
     SYNC_KEYS.forEach(k => {
-      if (dirty.includes(k)) return;
+      if (k === MERGE_KEY || dirty.includes(k)) return;
+      const localVal = _origGetItem.call(localStorage, k);
       if (k in remote) {
-        const local = _origGetItem.call(localStorage, k);
-        if (remote[k] !== null && remote[k] !== local) {
-          if (local !== null) _origSetItem.call(localStorage, 'backup-before-sync:' + k, local);
+        if (remote[k] !== null && remote[k] !== localVal) {
+          if (localVal !== null) _origSetItem.call(localStorage, 'backup-before-sync:' + k, localVal);
           _origSetItem.call(localStorage, k, remote[k]);
         }
-      } else if (_origGetItem.call(localStorage, k) !== null) {
+      } else if (localVal !== null) {
         toPush.push(k);
       }
     });
@@ -73,8 +120,22 @@ function pullAll() {
 // Mirror writes of tracked keys to the cloud
 Storage.prototype.setItem = function (k, v) {
   _origSetItem.call(this, k, v);
-  if (this === localStorage && SYNC_KEYS.includes(k)) pushKeys([k]);
+  if (this !== localStorage || !SYNC_KEYS.includes(k)) return;
+  if (k === MERGE_KEY) {
+    // Merge with the cloud copy before writing so other devices' entries are kept
+    setDirty(getDirty().concat([k]));
+    pullAll().then(refreshViews);
+  } else {
+    pushKeys([k]);
+  }
 };
+function refreshViews() {
+  if (typeof buildMainPage === 'function') buildMainPage();
+  if (typeof renderPendingTable === 'function') renderPendingTable();
+  if (typeof renderPeriodStatus === 'function') renderPeriodStatus();
+  const hist = document.getElementById('history-overlay');
+  if (hist && hist.classList.contains('open') && typeof renderHistory === 'function') renderHistory();
+}
 
 // Hold DOMContentLoaded handlers until the first pull finishes
 (function () {
@@ -100,13 +161,9 @@ Storage.prototype.setItem = function (k, v) {
 // Refresh from cloud when the app comes back to the foreground
 document.addEventListener('visibilitychange', function () {
   if (document.visibilityState !== 'visible') return;
-  pullAll().then(() => {
-    if (typeof buildMainPage === 'function') buildMainPage();
-    if (typeof renderPendingTable === 'function') renderPendingTable();
-    if (typeof renderPeriodStatus === 'function') renderPeriodStatus();
-  });
+  pullAll().then(refreshViews);
 });
-window.addEventListener('online', () => pushKeys(getDirty()));
+window.addEventListener('online', () => pullAll().then(refreshViews));
 </script>
 <!-- Main Page -->
   <div id="main-page">
@@ -843,7 +900,7 @@ function nowTime() {
   });
 }
 function formatDate(str) {
-  const d = new Date(str + 'T00:00:00');
+  const d = new Date(str + 'T12:00:00+05:30');
   return d.toLocaleDateString('en-US', {
     day: 'numeric',
     month: 'long',
@@ -962,8 +1019,9 @@ function wireMediaElement(fieldId, block, el) {
   });
   // Track real playback so seeking to the end does not count.
   // Auto mode uses the native loop attribute so playback continues in the
-  // background without JS restarting it; a lap is detected when the loop
-  // seeks from the end back to the start.
+  // background without JS restarting it. Laps are detected by comparing the
+  // position with where wall-clock time says playback should be, so laps are
+  // still counted when the page was throttled or suspended (screen locked).
   let played = 0;
   let lastTime = 0;
   let lastWall = 0;
@@ -973,28 +1031,38 @@ function wireMediaElement(fieldId, block, el) {
     if (enough) addCount(fieldId, m.countOnEnd);
     else showToast('⚠️ Not counted: play the full track without skipping');
   };
-  el.loop = isAutoLoop(fieldId);
-  el.addEventListener('play', () => { lastWall = performance.now(); });
-  el.addEventListener('timeupdate', () => {
+  const track = () => {
     const now = performance.now();
-    const d = el.currentTime - lastTime;
-    const maxStep = ((now - lastWall) / 1000) * el.playbackRate * 1.5 + 1;
-    if (d > 0 && d <= maxStep) played += d;
-    lastTime = el.currentTime;
-    lastWall = now;
-  });
-  el.addEventListener('seeking', () => {
-    const nearEnd = el.duration && lastTime >= el.duration - (2 * el.playbackRate + 1);
-    if (el.loop && nearEnd && el.currentTime < 1) {
-      played += el.duration - lastTime;
-      lastTime = el.currentTime;
-      lastWall = performance.now();
-      finishLap();
-      return;
+    const D = el.duration;
+    const cur = el.currentTime;
+    const elapsed = Math.max(0, (now - lastWall) / 1000);
+    const expected = lastTime + elapsed * el.playbackRate;
+    if (el.loop && D && cur < expected - D / 2) {
+      // Wrapped back to the start. It is a real lap only if enough time
+      // passed to reach the end from the last known position.
+      const tol = Math.max(3, D * 0.05);
+      if (expected >= D - tol) {
+        const laps = Math.round((expected - cur) / D);
+        const exact = laps >= 1 && Math.abs(expected - laps * D - cur) <= tol;
+        played += D - lastTime;
+        finishLap();
+        if (exact) for (let i = 1; i < laps; i++) addCount(fieldId, m.countOnEnd);
+        played = cur;
+      } else {
+        played = 0;
+      }
+    } else {
+      const d = cur - lastTime;
+      if (d > 0 && d <= elapsed * el.playbackRate * 1.5 + 1) played += d;
     }
-    lastTime = el.currentTime;
-    lastWall = performance.now();
-  });
+    lastTime = cur;
+    lastWall = now;
+  };
+  el.loop = isAutoLoop(fieldId);
+  el.addEventListener('play', () => { lastTime = el.currentTime; lastWall = performance.now(); });
+  el.addEventListener('pause', track);
+  el.addEventListener('timeupdate', () => { if (!el.paused) track(); });
+  el.addEventListener('seeking', () => { if (!el.paused) track(); else { lastTime = el.currentTime; lastWall = performance.now(); } });
   el.addEventListener('ended', () => {
     played += Math.max(0, (el.duration || 0) - lastTime);
     lastTime = 0;
