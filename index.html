@@ -966,7 +966,16 @@ const MEDIA = {
   'archavatar-stotra': { src: 'media/archavatar-stotra.mp4', type: 'video', audioSrc: 'media/Archavtar%20Strotra.mp3', countOnEnd: 1 },
   'vandu-path': { src: 'media/vandu-path.mp4', type: 'video', audioSrc: 'media/Vandu.mp3', countOnEnd: 1 },
   'janmangal-path': { src: 'media/janmangal-path.mp3', type: 'audio', countOnEnd: 1 },
-  'namjap': { src: 'media/namjap.m4a', type: 'audio', countOnEnd: 50 }
+  'namjap': {
+    type: 'audio',
+    countOnEnd: 50,
+    tracks: [
+      { label: 'Audio 1', src: 'media/namjap.m4a' },
+      { label: 'Audio 2', src: 'media/namjap-2.mp3' },
+      { label: 'Audio 3', src: 'media/namjap-3.mp3' },
+      { label: 'Audio 4', src: 'media/namjap-4.mp3' }
+    ]
+  }
 };
 // Share of the track that must actually play (not skipped by seeking) to count
 const MIN_PLAYED_RATIO = 0.9;
@@ -1024,6 +1033,11 @@ function toggleSpeedPanel(fieldId) {
 }
 function getMediaModes() {
   try { return JSON.parse(localStorage.getItem('media-mode') || '{}'); } catch (e) { return {}; }
+}
+function playTrack(fieldId, mode) {
+  setMediaMode(fieldId, mode);
+  const el = mediaBlocks[fieldId].querySelector(`audio[data-mode="${mode}"], video[data-mode="${mode}"]`);
+  if (el) el.play().catch(() => {});
 }
 function setMediaMode(fieldId, mode) {
   const block = mediaBlocks[fieldId];
@@ -1107,15 +1121,26 @@ function createMediaBlock(fieldId) {
   const m = MEDIA[fieldId];
   const block = document.createElement('div');
   block.className = 'media-block';
-  const players = m.type === 'video'
-    ? `<video controls preload="none" playsinline data-mode="video" src="${m.src}"></video>` +
-      (m.audioSrc ? `<audio controls preload="none" data-mode="audio" class="hidden" src="${m.audioSrc}"></audio>` : '')
-    : `<audio controls preload="none" data-mode="audio" src="${m.src}"></audio>`;
-  const modeSwitch = m.audioSrc ? `
+  let players;
+  let modeSwitch = '';
+  if (m.tracks) {
+    players = m.tracks.map((t, i) =>
+      `<audio controls preload="none" data-mode="track${i}" class="${i ? 'hidden' : ''}" src="${t.src}"></audio>`).join('');
+    modeSwitch = `
+    <div class="mode-switch">
+      ${m.tracks.map((t, i) => `<button data-mode="track${i}" class="${i ? '' : 'active'}" onclick="playTrack('${fieldId}', 'track${i}')">🎧 ${t.label}</button>`).join('')}
+    </div>`;
+  } else if (m.type === 'video') {
+    players = `<video controls preload="none" playsinline data-mode="video" src="${m.src}"></video>` +
+      (m.audioSrc ? `<audio controls preload="none" data-mode="audio" class="hidden" src="${m.audioSrc}"></audio>` : '');
+    if (m.audioSrc) modeSwitch = `
     <div class="mode-switch">
       <button data-mode="video" class="active" onclick="setMediaMode('${fieldId}', 'video')">🎬 Video</button>
       <button data-mode="audio" onclick="setMediaMode('${fieldId}', 'audio')">🎧 Audio</button>
-    </div>` : '';
+    </div>`;
+  } else {
+    players = `<audio controls preload="none" data-mode="audio" src="${m.src}"></audio>`;
+  }
   block.innerHTML = `
     ${modeSwitch}
     ${players}
@@ -1149,6 +1174,11 @@ function attachMediaPlayers() {
       setSpeed(fieldId, speeds[fieldId] || 100);
       renderAutoLoop(fieldId);
       if (MEDIA[fieldId].audioSrc) setMediaMode(fieldId, getMediaModes()[fieldId] || 'video');
+      if (MEDIA[fieldId].tracks) {
+        const saved = getMediaModes()[fieldId];
+        const valid = MEDIA[fieldId].tracks.some((t, i) => saved === `track${i}`);
+        setMediaMode(fieldId, valid ? saved : 'track0');
+      }
     } else {
       slot.appendChild(mediaBlocks[fieldId]);
     }
