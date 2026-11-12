@@ -6,6 +6,7 @@ const SB_KEY = 'sb_publishable_XVqFzj3tvYz9ns-YWQ7oPw_RNBmTQ6D';
 const SB_TABLE = 'tracker_kv';
 const SYNC_KEYS = ['spiritual-tracker', 'pending-tracker', 'period-skip', 'last-auto-add-date'];
 const DIRTY_KEY = 'sync-dirty';
+const MTIME_KEY = 'sync-mtime';
 const SYNC_TIMEOUT_MS = 3000;
 const SYNC_ENABLED = /^https:\/\//.test(SB_URL);
 
@@ -22,6 +23,19 @@ function getDirty() {
 }
 function setDirty(list) {
   _origSetItem.call(localStorage, DIRTY_KEY, JSON.stringify(Array.from(new Set(list))));
+}
+function getMtimes() {
+  try { return JSON.parse(_origGetItem.call(localStorage, MTIME_KEY) || '{}'); } catch (e) { return {}; }
+}
+function setMtime(k, iso) {
+  const m = getMtimes();
+  m[k] = iso;
+  _origSetItem.call(localStorage, MTIME_KEY, JSON.stringify(m));
+}
+function toMs(iso) {
+  // Postgres may return more than 3 fractional digits; keep milliseconds only
+  const t = Date.parse(String(iso || '').replace(/(\.\d{3})\d+/, '$1'));
+  return isNaN(t) ? 0 : t;
 }
 const MERGE_KEY = 'spiritual-tracker';
 function parseJSON(v, fallback) {
@@ -59,10 +73,11 @@ function pushKeys(keys) {
   if (!SYNC_ENABLED || !keys.length) return Promise.resolve();
   // Mark as pending before sending so a pull never overwrites unsent changes
   setDirty(getDirty().concat(keys));
+  const mtimes = getMtimes();
   const rows = keys.map(k => ({
     key: k,
     value: _origGetItem.call(localStorage, k),
-    updated_at: new Date().toISOString()
+    updated_at: (k !== MERGE_KEY && mtimes[k]) || new Date().toISOString()
   }));
   return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?on_conflict=key', {
     method: 'POST',
@@ -79,7 +94,7 @@ function pullAll() {
   if (!SYNC_ENABLED) return Promise.resolve();
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), SYNC_TIMEOUT_MS);
-  return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?select=key,value', {
+  return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?select=key,value,updated_at', {
     headers: sbHeaders(), signal: ctrl.signal, cache: 'no-store'
   }).then(r => {
     clearTimeout(t);
@@ -88,7 +103,8 @@ function pullAll() {
   }).then(rows => {
     const dirty = getDirty();
     const remote = {};
-    rows.forEach(row => { remote[row.key] = row.value; });
+    const remoteTime = {};
+    rows.forEach(row => { remote[row.key] = row.value; remoteTime[row.key] = row.updated_at; });
     const toPush = dirty.filter(k => k !== MERGE_KEY);
     // Counts: always merge local, remote and any earlier backup
     const backup = parseJSON(_origGetItem.call(localStorage, 'backup-before-sync:' + MERGE_KEY), {});
@@ -100,14 +116,20 @@ function pullAll() {
       if (mergedStr !== remote[MERGE_KEY]) toPush.push(MERGE_KEY);
       else setDirty(getDirty().filter(k => k !== MERGE_KEY));
     }
-    // Other keys: unsent local changes win, otherwise take the cloud copy
+    // Other keys: the most recently changed copy wins. A response that was
+    // read before this device's latest write is older and must not undo it.
+    const mtimes = getMtimes();
     SYNC_KEYS.forEach(k => {
       if (k === MERGE_KEY || dirty.includes(k)) return;
       const localVal = _origGetItem.call(localStorage, k);
       if (k in remote) {
-        if (remote[k] !== null && remote[k] !== localVal) {
+        if (remote[k] === null || remote[k] === localVal) return;
+        if (toMs(remoteTime[k]) > toMs(mtimes[k])) {
           if (localVal !== null) _origSetItem.call(localStorage, 'backup-before-sync:' + k, localVal);
           _origSetItem.call(localStorage, k, remote[k]);
+          setMtime(k, remoteTime[k]);
+        } else if (localVal !== null) {
+          toPush.push(k);
         }
       } else if (localVal !== null) {
         toPush.push(k);
@@ -126,6 +148,7 @@ Storage.prototype.setItem = function (k, v) {
     setDirty(getDirty().concat([k]));
     pullAll().then(refreshViews);
   } else {
+    setMtime(k, new Date().toISOString());
     pushKeys([k]);
   }
 };
@@ -627,6 +650,13 @@ document.addEventListener('DOMContentLoaded', function() {
       align-items: center;
       justify-content: space-between;
     }
+    details.field-section > summary { list-style: none; cursor: pointer; margin-bottom: 0; -webkit-tap-highlight-color: transparent; min-height: 36px; }
+    details.field-section > summary::-webkit-details-marker { display: none; }
+    .fs-right { display: flex; align-items: center; gap: 10px; }
+    .fs-total { font-size: 18px; font-weight: 800; }
+    .fs-arrow { font-size: 12px; color: #aaa; transition: transform .2s; }
+    details.field-section[open] .fs-arrow { transform: rotate(180deg); }
+    .fs-entries { margin-top: 8px; }
     .entry-item {
       display: flex;
       align-items: center;
@@ -1291,18 +1321,17 @@ function renderDateGroup(dt, dayData) {
       </div>`).join('');
     const dayFieldTotal = calcDayFieldTotal(entries);
     return `
-      <div class="field-section">
-        <div class="field-sec-header">
+      <details class="field-section">
+        <summary class="field-sec-header">
           <span style="color:${f.color};font-size:13px;">${f.name}</span>
-          <span style="font-size:11px;color:#aaa">${entries.length} times</span>
-        </div>
-        ${entryRows}
-        ${entries.length > 1 ? `
-          <div class="day-field-total">
-            <span class="dt-label">= Total for this field</span>
-            <span class="dt-val" style="color:${f.color}">${dayFieldTotal.toLocaleString('en-US')}</span>
-          </div>` : ''}
-      </div>`;
+          <span class="fs-right">
+            <span style="font-size:11px;color:#aaa">${entries.length} times</span>
+            <span class="fs-total" style="color:${f.color}">${dayFieldTotal.toLocaleString('en-US')}</span>
+            <span class="fs-arrow">▾</span>
+          </span>
+        </summary>
+        <div class="fs-entries">${entryRows}</div>
+      </details>`;
   }).join('');
   return `
     <div class="date-group">
