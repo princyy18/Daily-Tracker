@@ -112,6 +112,22 @@ function hashStr(str) {
 function getDayHashes() {
   return parseJSON(_origGetItem.call(localStorage, DAY_HASH_KEY), {});
 }
+// Corrections: "date|field|time" -> max entries allowed at that time.
+// Used to remove entries added by mistake; every device applies the same cap.
+const CAPS_KEY = 'entry-caps';
+function applyCaps(data, caps) {
+  Object.keys(caps || {}).forEach(rule => {
+    const [date, field, time] = rule.split('|');
+    const list = data[date] && data[date][field];
+    if (!list) return;
+    const atTime = list.filter(e => e.time === time)
+      .sort((x, y) => String(x.id || '').localeCompare(String(y.id || '')));
+    if (atTime.length <= caps[rule]) return;
+    const keep = new Set(atTime.slice(0, caps[rule]));
+    data[date][field] = list.filter(e => e.time !== time || keep.has(e));
+  });
+  return data;
+}
 let syncChain = Promise.resolve();
 function pullAll() {
   if (!SYNC_ENABLED) return Promise.resolve();
@@ -154,6 +170,12 @@ function syncOnce() {
       remoteDays[d] = remote[k];
       local = mergeTracker(local, { [d]: parseJSON(remote[k], {}) });
     });
+    // Corrections: union of caps from this device and the cloud (smallest cap wins)
+    const caps = parseJSON(_origGetItem.call(localStorage, CAPS_KEY), {});
+    const remoteCaps = parseJSON(remote[CAPS_KEY], {});
+    Object.keys(remoteCaps).forEach(k => { caps[k] = k in caps ? Math.min(caps[k], remoteCaps[k]) : remoteCaps[k]; });
+    _origSetItem.call(localStorage, CAPS_KEY, JSON.stringify(caps));
+    local = applyCaps(local, caps);
     const mergedStr = JSON.stringify(local);
     if (mergedStr !== localStr && Object.keys(local).length) _origSetItem.call(localStorage, MERGE_KEY, mergedStr);
     if (backup) localStorage.removeItem(backupKey);
@@ -1166,11 +1188,10 @@ function wireMediaElement(fieldId, block, el) {
       // passed to reach the end from the last known position.
       const tol = Math.max(3, D * 0.05);
       if (expected >= D - tol) {
-        const laps = Math.round((expected - cur) / D);
-        const exact = laps >= 1 && Math.abs(expected - laps * D - cur) <= tol;
+        // Count at most one lap per wrap: a long gap (page suspended, audio
+        // paused by the system) must never turn into many counts at once.
         played += D - lastTime;
         finishLap();
-        if (exact) for (let i = 1; i < laps; i++) addCount(fieldId, m.countOnEnd);
         played = cur;
       } else {
         played = 0;
