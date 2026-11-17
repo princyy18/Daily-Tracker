@@ -48,8 +48,9 @@ function timeToMinutes(t) {
   if (m[3].toUpperCase() === 'PM') h += 12;
   return h * 60 + Number(m[2]);
 }
-// Entries are append-only, so two copies are merged as a multiset union:
-// an entry (time + count) present N times on either side is kept N times.
+// Entries are append-only. Entries with an id are merged by id, so two
+// devices adding the same count in the same minute both keep their entry.
+// Older entries without an id are merged as a multiset on time + count.
 function mergeTracker(a, b) {
   const out = JSON.parse(JSON.stringify(a || {}));
   Object.keys(b || {}).forEach(date => {
@@ -57,8 +58,16 @@ function mergeTracker(a, b) {
     Object.keys(b[date] || {}).forEach(field => {
       const list = out[date][field] || [];
       const avail = {};
-      list.forEach(e => { const sig = e.time + '|' + e.count; avail[sig] = (avail[sig] || 0) + 1; });
+      const ids = new Set();
+      list.forEach(e => {
+        if (e.id) ids.add(e.id);
+        else { const sig = e.time + '|' + e.count; avail[sig] = (avail[sig] || 0) + 1; }
+      });
       (b[date][field] || []).forEach(e => {
+        if (e.id) {
+          if (!ids.has(e.id)) { ids.add(e.id); list.push(e); }
+          return;
+        }
         const sig = e.time + '|' + e.count;
         if (avail[sig] > 0) avail[sig]--;
         else list.push(e);
@@ -82,21 +91,45 @@ function pushKeys(keys) {
   return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?on_conflict=key', {
     method: 'POST',
     headers: sbHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
-    body: JSON.stringify(rows),
-    keepalive: true
+    body: JSON.stringify(rows)
   }).then(r => {
     if (!r.ok) throw new Error('push ' + r.status);
     const sent = rows.filter(row => _origGetItem.call(localStorage, row.key) === row.value).map(row => row.key);
     setDirty(getDirty().filter(k => !sent.includes(k)));
   }).catch(() => {});
 }
+// Counts are stored one row per day ("day:YYYY-MM-DD") so a sync only moves
+// the days that changed. Pulls fetch only rows changed since the last pull.
+const DAY_PREFIX = 'day:';
+const LAST_PULL_KEY = 'sync-last-pull';
+const DAY_HASH_KEY = 'sync-day-hash';
+const PULL_OVERLAP_MS = 60 * 60 * 1000; // tolerates clock differences between devices
+function hashStr(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h >>> 0) + ':' + str.length;
+}
+function getDayHashes() {
+  return parseJSON(_origGetItem.call(localStorage, DAY_HASH_KEY), {});
+}
+let syncChain = Promise.resolve();
 function pullAll() {
   if (!SYNC_ENABLED) return Promise.resolve();
+  const run = syncChain.then(syncOnce, syncOnce);
+  syncChain = run.catch(() => {});
+  return run;
+}
+function syncOnce() {
+  const startedAt = Date.now();
+  const lastPull = Number(_origGetItem.call(localStorage, LAST_PULL_KEY)) || 0;
+  let url = SB_URL + '/rest/v1/' + SB_TABLE + '?select=key,value,updated_at';
+  if (lastPull) {
+    const since = new Date(lastPull - PULL_OVERLAP_MS).toISOString();
+    url += '&or=(key.not.like.' + DAY_PREFIX + '*,updated_at.gt.' + encodeURIComponent(since) + ')';
+  }
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), SYNC_TIMEOUT_MS);
-  return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?select=key,value,updated_at', {
-    headers: sbHeaders(), signal: ctrl.signal, cache: 'no-store'
-  }).then(r => {
+  return fetch(url, { headers: sbHeaders(), signal: ctrl.signal, cache: 'no-store' }).then(r => {
     clearTimeout(t);
     if (!r.ok) throw new Error('pull ' + r.status);
     return r.json();
@@ -105,19 +138,42 @@ function pullAll() {
     const remote = {};
     const remoteTime = {};
     rows.forEach(row => { remote[row.key] = row.value; remoteTime[row.key] = row.updated_at; });
+
+    // ---- Counts ----
+    const localStr = _origGetItem.call(localStorage, MERGE_KEY);
+    let local = parseJSON(localStr, {});
+    const backupKey = 'backup-before-sync:' + MERGE_KEY;
+    const backup = parseJSON(_origGetItem.call(localStorage, backupKey), null);
+    if (backup) local = mergeTracker(local, backup);
+    const legacy = remote[MERGE_KEY] ? parseJSON(remote[MERGE_KEY], {}) : null;
+    if (legacy) local = mergeTracker(local, legacy);
+    const remoteDays = {};
+    Object.keys(remote).forEach(k => {
+      if (!k.startsWith(DAY_PREFIX)) return;
+      const d = k.slice(DAY_PREFIX.length);
+      remoteDays[d] = remote[k];
+      local = mergeTracker(local, { [d]: parseJSON(remote[k], {}) });
+    });
+    const mergedStr = JSON.stringify(local);
+    if (mergedStr !== localStr && Object.keys(local).length) _origSetItem.call(localStorage, MERGE_KEY, mergedStr);
+    if (backup) localStorage.removeItem(backupKey);
+
+    const hashes = getDayHashes();
+    const dayRows = [];
+    Object.keys(local).forEach(d => {
+      const v = JSON.stringify(local[d]);
+      const h = hashStr(v);
+      if (d in remoteDays) {
+        if (remoteDays[d] === v) { hashes[d] = h; return; }
+      } else if (hashes[d] === h) {
+        return;
+      }
+      dayRows.push({ key: DAY_PREFIX + d, value: v, updated_at: new Date().toISOString(), _h: h, _d: d });
+    });
+    _origSetItem.call(localStorage, DAY_HASH_KEY, JSON.stringify(hashes));
+
+    // ---- Other keys: the most recently changed copy wins ----
     const toPush = dirty.filter(k => k !== MERGE_KEY);
-    // Counts: always merge local, remote and any earlier backup
-    const backup = parseJSON(_origGetItem.call(localStorage, 'backup-before-sync:' + MERGE_KEY), {});
-    const local = parseJSON(_origGetItem.call(localStorage, MERGE_KEY), {});
-    const merged = mergeTracker(mergeTracker(parseJSON(remote[MERGE_KEY], {}), local), backup);
-    const mergedStr = JSON.stringify(merged);
-    if (Object.keys(merged).length) {
-      if (mergedStr !== _origGetItem.call(localStorage, MERGE_KEY)) _origSetItem.call(localStorage, MERGE_KEY, mergedStr);
-      if (mergedStr !== remote[MERGE_KEY]) toPush.push(MERGE_KEY);
-      else setDirty(getDirty().filter(k => k !== MERGE_KEY));
-    }
-    // Other keys: the most recently changed copy wins. A response that was
-    // read before this device's latest write is older and must not undo it.
     const mtimes = getMtimes();
     SYNC_KEYS.forEach(k => {
       if (k === MERGE_KEY || dirty.includes(k)) return;
@@ -135,8 +191,33 @@ function pullAll() {
         toPush.push(k);
       }
     });
-    return pushKeys(toPush);
+    setDirty(getDirty().filter(k => k !== MERGE_KEY));
+
+    return pushDays(dayRows).then(ok => {
+      if (ok) _origSetItem.call(localStorage, LAST_PULL_KEY, String(startedAt));
+      if (ok && legacy) {
+        // All days now live in their own rows; drop the old single-row copy
+        return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?key=eq.' + MERGE_KEY, {
+          method: 'DELETE', headers: sbHeaders()
+        }).catch(() => {});
+      }
+    }).then(() => pushKeys(toPush));
   }).catch(() => { clearTimeout(t); });
+}
+function pushDays(dayRows) {
+  if (!dayRows.length) return Promise.resolve(true);
+  const body = dayRows.map(r => ({ key: r.key, value: r.value, updated_at: r.updated_at }));
+  return fetch(SB_URL + '/rest/v1/' + SB_TABLE + '?on_conflict=key', {
+    method: 'POST',
+    headers: sbHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+    body: JSON.stringify(body)
+  }).then(r => {
+    if (!r.ok) throw new Error('push ' + r.status);
+    const hashes = getDayHashes();
+    dayRows.forEach(r => { hashes[r._d] = r._h; });
+    _origSetItem.call(localStorage, DAY_HASH_KEY, JSON.stringify(hashes));
+    return true;
+  }).catch(() => false);
 }
 
 // Mirror writes of tracked keys to the cloud
@@ -144,8 +225,7 @@ Storage.prototype.setItem = function (k, v) {
   _origSetItem.call(this, k, v);
   if (this !== localStorage || !SYNC_KEYS.includes(k)) return;
   if (k === MERGE_KEY) {
-    // Merge with the cloud copy before writing so other devices' entries are kept
-    setDirty(getDirty().concat([k]));
+    // Merge the changed days with the cloud copy so other devices' entries are kept
     pullAll().then(refreshViews);
   } else {
     setMtime(k, new Date().toISOString());
@@ -1299,7 +1379,7 @@ function addCount(fieldId, autoVal) {
   const today = todayStr();
   if (!data[today]) data[today] = {};
   if (!data[today][fieldId]) data[today][fieldId] = [];
-  data[today][fieldId].push({ time: nowTime(), count: val });
+  data[today][fieldId].push({ time: nowTime(), count: val, id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7) });
   saveData(data);
   if (!autoVal) {
     inp.value = '';
